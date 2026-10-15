@@ -110,6 +110,7 @@ export const sfx = {
   bust: play(() => { tone(150, 0.45, { type: 'sawtooth', gain: 0.13, slide: 0.3 }); noise(0.3, { type: 'lowpass', freq: 800, gain: 0.3 }); }),
   buzz: play(() => { tone(100, 0.2, { type: 'sawtooth', gain: 0.035 }); tone(150, 0.18, { type: 'square', gain: 0.015 }); }),
   type: play(() => { noise(0.02, { freq: 3200, q: 2, gain: 0.05 }); }),
+  chat: play(() => { tone(1320, 0.08, { type: 'triangle', gain: 0.05 }); tone(1760, 0.1, { type: 'triangle', gain: 0.04, at: 0.06 }); }),
   thump: play(() => { tone(55, 0.6, { gain: 0.6, slide: 0.5 }); noise(0.2, { type: 'lowpass', freq: 300, gain: 0.3 }); }),
   // Corredera de la escopeta: "chk-chk".
   pump: play(() => {

@@ -291,3 +291,77 @@ export function neon(text, color) {
   ctx.fillText(text, 256, 68);
   return toTex(c);
 }
+
+// Fichas de casino: canto con franjas blancas y cara con anillo de rombos.
+const chipCache = new Map();
+export function chip(color, stripe = '#f3efe6', label = 'RJ') {
+  const key = color + stripe + label;
+  if (chipCache.has(key)) return chipCache.get(key);
+  const [s, sx] = mk(256, 16);
+  sx.fillStyle = color;
+  sx.fillRect(0, 0, 256, 16);
+  sx.fillStyle = stripe;
+  for (let i = 0; i < 8; i++) sx.fillRect(i * 32 + 6, 0, 12, 16);
+  grain(sx, 256, 16, 18);
+
+  const S = 128, [f, fx] = mk(S, S);
+  fx.fillStyle = color;
+  fx.fillRect(0, 0, S, S);
+  fx.strokeStyle = stripe;
+  fx.lineWidth = 9;
+  for (let i = 0; i < 8; i++) {
+    const a = i / 8 * Math.PI * 2;
+    fx.beginPath();
+    fx.arc(S / 2, S / 2, S / 2 - 7, a, a + 0.32);
+    fx.stroke();
+  }
+  fx.strokeStyle = stripe;
+  fx.globalAlpha = 0.6;
+  fx.lineWidth = 2;
+  fx.setLineDash([4, 4]);
+  fx.beginPath(); fx.arc(S / 2, S / 2, S * 0.3, 0, Math.PI * 2); fx.stroke();
+  fx.setLineDash([]);
+  fx.globalAlpha = 0.9;
+  fx.fillStyle = stripe;
+  fx.font = `700 26px ${UI_FONT}`;
+  fx.textAlign = 'center';
+  fx.textBaseline = 'middle';
+  fx.fillText(label, S / 2, S / 2 + 2);
+  fx.globalAlpha = 1;
+  grain(fx, S, S, 14);
+
+  const out = { side: toTex(s), face: toTex(f) };
+  chipCache.set(key, out);
+  return out;
+}
+
+// Madera oscura para el canto de la mesa y la barra.
+export function wood() {
+  const [c, ctx] = mk(512, 64);
+  ctx.fillStyle = '#2a170d';
+  ctx.fillRect(0, 0, 512, 64);
+  for (let i = 0; i < 70; i++) {
+    const y = Math.random() * 64, a = 0.05 + Math.random() * 0.12;
+    ctx.strokeStyle = Math.random() < 0.5 ? `rgba(0,0,0,${a * 2})` : `rgba(120,70,35,${a})`;
+    ctx.lineWidth = 0.5 + Math.random() * 1.5;
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    for (let x = 0; x <= 512; x += 32) ctx.lineTo(x, y + Math.sin(x * 0.02 + i) * 2);
+    ctx.stroke();
+  }
+  grain(ctx, 512, 64, 10);
+  return toTex(c, [6, 1]);
+}
+
+// Canto del mazo: muchas cartas apiladas, con líneas finas de papel.
+export function deckEdge() {
+  const [c, ctx] = mk(64, 128);
+  ctx.fillStyle = '#e9e4d8';
+  ctx.fillRect(0, 0, 64, 128);
+  for (let y = 0; y < 128; y += 2) {
+    ctx.fillStyle = `rgba(60,55,45,${0.08 + Math.random() * 0.18})`;
+    ctx.fillRect(0, y, 64, 1);
+  }
+  grain(ctx, 64, 128, 10);
+  return toTex(c);
+}

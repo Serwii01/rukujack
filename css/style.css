@@ -399,3 +399,85 @@ body:not(.retro) .scan { opacity: 0.45; }
 }
 .shot-sub { font-size: 16px; letter-spacing: 1px; color: #d9c7cb; margin: 8px 0 22px; }
 .shot-buttons { display: flex; gap: 10px; justify-content: center; }
+
+/* Chat de la partida (solo online) */
+#chat[hidden] { display: none; }
+#chat { position: fixed; left: 16px; bottom: 140px; width: min(320px, calc(100vw - 32px)); }
+#chat-toggle { display: none; }
+#chat-unread { color: var(--pink); }
+#chat-log {
+  max-height: 190px;
+  overflow-y: auto;
+  padding: 6px 2px;
+  font-size: 14px;
+  line-height: 1.35;
+  scrollbar-width: thin;
+  mask-image: linear-gradient(to bottom, transparent, #000 18px);
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 18px);
+  user-select: text;
+  -webkit-user-select: text;
+}
+.chat-line {
+  padding: 2px 8px;
+  text-shadow: 0 0 4px #000, 0 0 2px #000;
+  overflow-wrap: anywhere;
+  animation: chat-fade 0.8s 12s forwards;
+}
+.chat-line b { font-weight: 700; letter-spacing: 0.5px; }
+.chat-line.sys { color: var(--dim); font-style: italic; font-size: 12px; }
+.chat-line.old { animation-delay: 0s; }
+@keyframes chat-fade { to { opacity: 0; } }
+#chat:hover .chat-line, #chat.focus .chat-line, #chat.open .chat-line { animation: none; opacity: 1; }
+#chat-quick { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 6px; opacity: 0; transition: opacity 0.2s; }
+#chat:hover #chat-quick, #chat.focus #chat-quick, #chat.open #chat-quick { opacity: 1; }
+#chat-quick .btn { font-size: 11px; padding: 4px 8px; text-transform: none; letter-spacing: 0.5px; }
+#chat-form { display: flex; gap: 6px; }
+#chat-input {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--ui);
+  font-size: 14px;
+  color: var(--ink);
+  background: var(--glass);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 7px 10px;
+  outline: none;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  user-select: text;
+  -webkit-user-select: text;
+}
+#chat-input:focus { border-color: var(--cyan); box-shadow: 0 0 0 1px var(--cyan); }
+#chat-input::placeholder { color: var(--dim); }
+
+/* Bocadillo sobre el asiento de quien habla */
+.bubble {
+  position: absolute;
+  transform: translate(-50%, calc(-100% - 46px)) scale(0.9);
+  max-width: 200px;
+  width: max-content;
+  padding: 5px 10px;
+  border-radius: 10px;
+  background: rgba(8, 9, 14, 0.88);
+  border: 1px solid var(--c, var(--line));
+  box-shadow: 0 0 12px color-mix(in srgb, var(--c, #fff) 35%, transparent);
+  font-size: 13px;
+  line-height: 1.3;
+  text-align: center;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  opacity: 0;
+  transition: opacity 0.25s, transform 0.25s;
+  pointer-events: none;
+}
+.bubble.show { opacity: 1; transform: translate(-50%, calc(-100% - 46px)); }
+
+@media (max-width: 640px) {
+  #chat { top: 64px; bottom: auto; left: 12px; width: calc(100vw - 24px); }
+  #chat-toggle { display: inline-block; }
+  #chat-box { display: none; margin-top: 8px; padding: 8px; border-radius: 12px; background: rgba(10, 11, 18, 0.88); border: 1px solid var(--line); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+  #chat.open #chat-box { display: block; }
+  #chat-log { max-height: 34vh; }
+  #chat-input { font-size: 16px; }
+}
