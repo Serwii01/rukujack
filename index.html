@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Rukujack</title>
+  <meta name="description" content="Blackjack online para 1 a 6 jugadores. Elige quién reparte.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;700&family=VT323&family=Special+Elite&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <script type="importmap">
+    { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
+  </script>
+</head>
+<body>
+  <canvas id="view"></canvas>
+  <canvas id="noise" width="160" height="90"></canvas>
+  <div class="fx scan"></div>
+  <div class="fx vignette"></div>
+  <div id="labels"></div>
+
+  <div id="hud" hidden>
+    <div id="room">
+      <span id="room-label"></span>
+      <button id="copy-link" class="btn xs" hidden>Copiar enlace</button>
+    </div>
+    <div id="top-right">
+      <button id="panel-btn" class="btn xs">Mesa <span id="panel-count"></span></button>
+      <button id="mute" class="btn xs" title="Sonido">Sonido: sí</button>
+      <button id="leave" class="btn xs">Salir</button>
+    </div>
+    <div id="dealer-say"></div>
+    <div id="monitor">
+      <div class="row"><span id="m-label">FICHAS</span><b id="m-chips">0</b></div>
+      <div class="row"><span>APUESTA</span><b id="m-bet">0</b></div>
+      <div class="row small"><span>EXENCIONES</span><b id="m-waivers"></b></div>
+    </div>
+    <div id="actions"></div>
+    <aside id="panel" hidden>
+      <div class="panel-head">
+        <span>MESA</span>
+        <button id="panel-close" class="btn xs" aria-label="Cerrar">✕</button>
+      </div>
+      <div id="panel-body"></div>
+    </aside>
+  </div>
+
+  <div id="lobby">
+    <div class="waiver">
+      <div class="stamp">RUKUJACK</div>
+      <h1>EXENCIÓN GENERAL<br>DE RESPONSABILIDAD</h1>
+      <p>El abajo firmante se sienta a esta mesa por voluntad propia y renuncia a cualquier reclamación contra la casa, el crupier o quien le haya invitado.</p>
+      <p>La casa no responde de las fichas perdidas ni del orgullo herido. Blackjack paga 3 a 2. Doblar solo con dos cartas. Quien reparte, manda. No hay reembolsos.</p>
+      <label class="sign">
+        <span>FIRMA:</span>
+        <input id="name" maxlength="12" autocomplete="off" spellcheck="false" placeholder="tu nombre">
+      </label>
+      <div class="lobby-buttons">
+        <button id="btn-solo" class="btn ink">Jugar solo</button>
+        <button id="btn-host" class="btn ink">Abrir mesa online</button>
+      </div>
+      <div class="join">
+        <input id="code" maxlength="5" autocomplete="off" spellcheck="false" placeholder="CÓDIGO">
+        <button id="btn-join" class="btn ink">Unirse</button>
+      </div>
+      <div id="lobby-status"></div>
+      <div class="fine">De 1 a 6 jugadores · el anfitrión elige crupier · H pedir · S plantarse · D doblar · Enter apostar</div>
+    </div>
+  </div>
+
+  <div id="toast"></div>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
