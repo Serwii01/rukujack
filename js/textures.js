@@ -14,7 +14,7 @@ function mk(w, h) {
 function toTex(c, repeat) {
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
-  t.magFilter = THREE.NearestFilter;
+  t.anisotropy = 8;
   if (repeat) {
     t.wrapS = t.wrapT = THREE.RepeatWrapping;
     t.repeat.set(repeat[0], repeat[1]);
@@ -74,7 +74,9 @@ function arcText(ctx, text, cx, cy, R, font, spacing = 0) {
 
 export function felt() {
   const W = 1024, H = 608;
-  const [c, ctx] = mk(W, H);
+  const K = 2;
+  const [c, ctx] = mk(W * K, H * K);
+  ctx.scale(K, K);
   ctx.fillStyle = '#0d3a2c';
   ctx.fillRect(0, 0, W, H);
   const [cx, cy] = feltPx(0, ARC_CZ, W, H);
@@ -87,9 +89,9 @@ export function felt() {
   stains(ctx, W, H, 25, '0,0,0', 110, 0.25);
 
   ctx.fillStyle = 'rgba(232,214,160,0.75)';
-  arcText(ctx, 'RUKUJACK', cx, cy, 0.86 * px, `700 30px ${UI_FONT}`, 10);
+  arcText(ctx, 'RUKUJACK', cx, cy, 0.86 * px, `700 34px ${UI_FONT}`, 10);
   ctx.fillStyle = 'rgba(232,214,160,0.5)';
-  arcText(ctx, 'BLACKJACK PAGA 3 A 2  ·  LA BANCA PIDE CON 16', cx, cy, 1.02 * px, `500 19px ${UI_FONT}`, 2);
+  arcText(ctx, 'BLACKJACK PAGA 3 A 2  ·  LA BANCA PIDE CON 16', cx, cy, 1.02 * px, `600 21px ${UI_FONT}`, 2);
 
   // Líneas finas del tapete.
   ctx.strokeStyle = 'rgba(232,214,160,0.35)';
@@ -112,7 +114,7 @@ export function felt() {
     ctx.beginPath(); ctx.arc(x, y, 24, 0, Math.PI * 2); ctx.stroke();
     ctx.globalAlpha = 1;
   }
-  grain(ctx, W, H, 14);
+  grain(ctx, W * K, H * K, 14);
   return toTex(c);
 }
 
@@ -182,7 +184,12 @@ export function visor() {
 
 const RED = new Set(['♥', '♦']);
 const faceCache = new Map();
-const CW = 128, CH = 180;
+const CW = 128, CH = 180, CK = 2;
+function mkCard() {
+  const [c, ctx] = mk(CW * CK, CH * CK);
+  ctx.scale(CK, CK);
+  return [c, ctx];
+}
 
 function cardShape(ctx, fill) {
   ctx.clearRect(0, 0, CW, CH);
@@ -194,7 +201,7 @@ function cardShape(ctx, fill) {
 export function cardFace(r, s) {
   const key = r + s;
   if (faceCache.has(key)) return faceCache.get(key);
-  const [c, ctx] = mk(CW, CH);
+  const [c, ctx] = mkCard();
   cardShape(ctx, '#f3f0e8');
   const col = RED.has(s) ? '#d3203d' : '#17181d';
   const sym = s + '︎';
@@ -202,10 +209,10 @@ export function cardFace(r, s) {
   const corner = () => {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'alphabetic';
-    ctx.font = `700 38px ${UI_FONT}`;
-    ctx.fillText(r, 26, 44);
-    ctx.font = '28px Arial, sans-serif';
-    ctx.fillText(sym, 26, 72);
+    ctx.font = `700 46px ${UI_FONT}`;
+    ctx.fillText(r, 27, 48);
+    ctx.font = '32px Arial, sans-serif';
+    ctx.fillText(sym, 27, 80);
   };
   corner();
   ctx.save();
@@ -226,7 +233,7 @@ export function cardFace(r, s) {
     ctx.font = '74px Arial, sans-serif';
     ctx.fillText(sym, CW / 2 + 4, CH / 2 + 4);
   }
-  grain(ctx, CW, CH, 10);
+  grain(ctx, CW * CK, CH * CK, 10);
   const t = toTex(c);
   faceCache.set(key, t);
   return t;
@@ -235,14 +242,14 @@ export function cardFace(r, s) {
 let blankTex = null;
 export function cardBlank() {
   if (blankTex) return blankTex;
-  const [c, ctx] = mk(CW, CH);
+  const [c, ctx] = mkCard();
   cardShape(ctx, '#f3f0e8');
   blankTex = toTex(c);
   return blankTex;
 }
 
 export function cardBack() {
-  const [c, ctx] = mk(CW, CH);
+  const [c, ctx] = mkCard();
   cardShape(ctx, '#14151d');
   ctx.save();
   roundRect(ctx, 10, 10, CW - 20, CH - 20, 8);
@@ -266,7 +273,7 @@ export function cardBack() {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText('21', CW / 2, CH / 2 + 2);
-  grain(ctx, CW, CH, 10);
+  grain(ctx, CW * CK, CH * CK, 10);
   return toTex(c);
 }
 

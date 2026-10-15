@@ -358,3 +358,44 @@ html, body {
   #panel { top: 56px; }
   #monitor .small { display: none; }
 }
+
+/* Modo retro: render pixelado y efecto CRT más marcado */
+body:not(.retro) #view { image-rendering: auto; }
+body.retro #noise { opacity: 0.07; }
+body:not(.retro) .scan { opacity: 0.45; }
+
+/* Valores de varias manos (al separar) */
+.seat .val i { font-style: normal; opacity: 0.4; margin: 0 6px; }
+.seat .val .act { color: var(--c); text-decoration: underline; text-underline-offset: 4px; }
+.seat .val .bust { color: var(--pink); text-decoration: line-through; }
+
+/* Disparo: destello blanco, luego fundido a negro con el cartel */
+#shot {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  opacity: 0;
+  background: #fff;
+  z-index: 50;
+}
+#shot.flash { opacity: 1; background: #fff; transition: none; }
+#shot.dead {
+  opacity: 1;
+  pointer-events: auto;
+  background: radial-gradient(ellipse at center, rgba(70,0,10,0.92), #000 75%);
+  transition: background 1.6s ease-in;
+}
+#shot:not(.flash):not(.dead) { transition: opacity 0.35s; }
+#shot .shot-card { opacity: 0; transform: scale(1.08); transition: opacity 0.8s 1.4s, transform 0.8s 1.4s; text-align: center; }
+#shot.dead.show .shot-card { opacity: 1; transform: none; }
+.shot-title {
+  font-family: var(--mono);
+  font-size: clamp(56px, 12vw, 140px);
+  letter-spacing: 12px;
+  color: #ff2a3d;
+  text-shadow: 0 0 30px rgba(255, 30, 60, 0.7);
+}
+.shot-sub { font-size: 16px; letter-spacing: 1px; color: #d9c7cb; margin: 8px 0 22px; }
+.shot-buttons { display: flex; gap: 10px; justify-content: center; }

@@ -1,4 +1,4 @@
-import { Table, MIN_BET, HOST_ID, MAX_PLAYERS } from './blackjack.js';
+import { Table, MIN_BET, HOST_ID, MAX_PLAYERS, MAX_WAIVERS } from './blackjack.js';
 import { HostNet, ClientNet, randomCode, normalizeCode } from './net.js';
 import { Scene3D } from './scene.js';
 import { SEATS, DEALER_CARDS_Z } from './layout.js';
@@ -22,6 +22,17 @@ await Promise.race([
 
 const scene = new Scene3D($('#view'));
 scene.onBuzz = () => sfx.buzz();
+if (location.hostname === 'localhost') window.__scene = scene;
+
+// Modo retro (pixelado) opcional; por defecto se ve nítido.
+function setRetro(on) {
+  scene.setRetro(on);
+  document.body.classList.toggle('retro', on);
+  $('#retro').textContent = on ? 'Retro: sí' : 'Retro: no';
+  store.set('rukujack-retro', on ? '1' : '0');
+}
+$('#retro').onclick = () => setRetro(!scene.retro);
+setRetro(store.get('rukujack-retro') === '1');
 
 let myId = null;
 let state = null;
@@ -83,7 +94,7 @@ function applyMsg(table, id, m) {
   if (!m || typeof m !== 'object') return;
   switch (m.t) {
     case 'bet': table.placeBet(id, Number(m.amount)); break;
-    case 'act': if (['hit', 'stand', 'double'].includes(m.a)) table.action(id, m.a); break;
+    case 'act': if (['hit', 'stand', 'double', 'split'].includes(m.a)) table.action(id, m.a); break;
     case 'dact': if (['hit', 'stand'].includes(m.a)) table.dealerAction(id, m.a); break;
     case 'deal': table.dealNow(id); break;
     case 'waiver': table.waiver(id); break;
@@ -100,6 +111,8 @@ function startLocal(name, isOnline) {
     if (net) net.broadcast({ t: 'state', s });
   });
   sendMsg = m => applyMsg(table, myId, m);
+  // Acceso para depurar en local (no se usa en producción).
+  if (location.hostname === 'localhost') window.__table = table;
   if (!isOnline) {
     table.addPlayer(myId, name);
     enterGame(null);
@@ -213,14 +226,50 @@ function onState(s) {
   sounds(prev, s);
   scene.update(s, myId);
   renderHud();
+  // Disparos nuevos en esta ronda.
+  if (prev && s.shots.length && !(prev.phase === 'result' && prev.shots.length)) {
+    s.shots.forEach((id, i) => setTimeout(() => playShot(id), i * 3200));
+  }
 }
+
+const cardsOf = p => p.hands.flatMap(h => h.cards);
+const bustCount = p => (p ? p.hands.filter(h => h.status === 'bust').length : 0);
 
 function allCards(s) {
   const m = new Map();
   for (const c of s.dealer.hand) m.set(c.id, c);
-  for (const p of s.players) for (const c of p.hand) m.set(c.id, c);
+  for (const p of s.players) for (const c of cardsOf(p)) m.set(c.id, c);
   return m;
 }
+
+// ---------- Eliminación: el crupier saca la escopeta ----------
+function playShot(id) {
+  const s = state;
+  const victim = s.players.find(p => p.id === id);
+  if (!victim) return;
+  const isMe = id === myId;
+  const target = isMe ? scene.cameraTarget() : scene.seatTarget(victim.seat);
+  sfx.pump();
+  const overlay = $('#shot');
+  scene.shoot(target, () => {
+    sfx.gunshot();
+    overlay.className = 'flash';
+    void overlay.offsetWidth;
+    if (isMe) {
+      scene.shake(0.35, 0.8);
+      sfx.ring();
+      $('#shot-sub').textContent = `Sin fichas y sin exenciones (${MAX_WAIVERS}/${MAX_WAIVERS}).`;
+      setTimeout(() => { overlay.className = 'dead show'; }, 120);
+    } else {
+      scene.shake(0.12, 0.5);
+      toast(`${victim.name} ha sido eliminado`);
+      setTimeout(() => { overlay.className = ''; }, 200);
+    }
+  });
+}
+
+$('#shot-close').onclick = () => { $('#shot').className = ''; };
+$('#shot-restart').onclick = () => backToLobby();
 
 function sounds(prev, s) {
   if (!prev) return;
@@ -237,7 +286,7 @@ function sounds(prev, s) {
   if (s.turn === myId && prev.turn !== myId) sfx.turn();
   if (s.dealer.id === myId && s.dealer.waiting && !prev.dealer.waiting) sfx.turn();
   if (m.ready && pm && !pm.ready) sfx.chip();
-  if (m.status === 'bust' && pm && pm.status !== 'bust') sfx.bust();
+  if (bustCount(m) > bustCount(pm)) sfx.bust();
   if (s.phase === 'result' && prev.phase !== 'result') {
     const delta = s.dealer.id === myId ? s.dealer.delta : (m.result ? m.delta : null);
     if (delta === null) return;
@@ -291,13 +340,22 @@ function actionsHtml(s, m) {
     return `<div class="info">${s.phase === 'dealing' ? 'Repartiendo...' : tp ? `Juega ${esc(tp.name)}<span class="timer"></span>` : 'Revelando...'}</div>`;
   }
 
+  if (m.eliminated) {
+    return `<div class="info">☠ Eliminado<small>Te quedaste sin fichas y sin exenciones. Ahora solo miras.</small></div>`
+      + `<button class="btn xs" data-a="restart">${online ? 'Salir de la mesa' : 'Nueva partida'}</button>`;
+  }
+
   // Estás mirando.
   if (m.role === 'spectator') {
     return `<div class="info">Estás mirando<small>Abre MESA para volver a apostar</small></div>`;
   }
 
   if (s.phase === 'betting') {
-    if (m.chips < MIN_BET) return `<div class="info">Sin fichas</div><button class="btn danger" data-a="waiver">Firmar otra exención</button>`;
+    if (m.chips < MIN_BET) {
+      const left = MAX_WAIVERS - m.waivers;
+      return `<div class="info">Sin fichas<small>${left === 1 ? 'Es tu última exención. Si vuelves a arruinarte, se acabó.' : `Te quedan ${left} exenciones`}</small></div>`
+        + `<button class="btn danger" data-a="waiver">Firmar exención (${m.waivers + 1}/${MAX_WAIVERS})</button>`;
+    }
     if (m.ready) {
       const extra = myId === HOST_ID && !s.dealer.id && s.players.length > 1 ? `<button class="btn xs" data-a="deal">Repartir ya</button>` : '';
       return `<div class="info">Apuestas ${m.bet}<small>Esperando al resto</small></div><span class="timer"></span>${extra}`;
@@ -310,25 +368,31 @@ function actionsHtml(s, m) {
       + `<button class="btn primary" data-a="bet">Apostar<kbd>⏎</kbd></button><span class="timer"></span>`;
   }
   if (s.phase === 'playing' && s.turn === myId) {
-    const canDouble = m.hand.length === 2 && m.chips >= m.bet;
-    return `<button class="btn" data-a="hit">Pedir<kbd>H</kbd></button>`
+    const handInfo = m.hands.length > 1 ? `<div class="info">Mano ${m.active + 1}/${m.hands.length}<small>${m.hands[m.active].value}</small></div>` : '';
+    return handInfo
+      + `<button class="btn" data-a="hit">Pedir<kbd>H</kbd></button>`
       + `<button class="btn primary" data-a="stand">Plantarse<kbd>S</kbd></button>`
-      + `<button class="btn danger" data-a="double" ${canDouble ? '' : 'disabled'}>Doblar<kbd>D</kbd></button>`
+      + `<button class="btn danger" data-a="double" ${m.canDouble ? '' : 'disabled'}>Doblar<kbd>D</kbd></button>`
+      + (m.canSplit ? `<button class="btn danger" data-a="split">Separar<kbd>P</kbd></button>` : '')
       + `<span class="timer"></span>`;
   }
   if (s.phase === 'result' && m.result) {
     const cls = m.delta > 0 ? 'win' : m.delta < 0 ? 'lose' : '';
-    const word = { win: 'GANAS', lose: 'PIERDES', push: 'EMPATE', bj: 'BLACKJACK' }[m.result];
+    const word = m.hands.length > 1
+      ? m.hands.map(h => RESULT_TXT[h.result]).join(' · ') + (m.delta ? '' : ' ±0')
+      : { win: 'GANAS', lose: 'PIERDES', push: 'EMPATE', bj: 'BLACKJACK' }[m.result];
     return `<div class="info big ${cls}">${word}${m.delta ? ' ' + signed(m.delta) : ''}</div>`;
   }
   let t = '';
   if (m.status === 'idle') t = s.phase === 'result' ? 'Siguiente ronda en breve...' : 'Esperas a la siguiente ronda';
   else if (s.phase === 'dealing') t = 'Repartiendo...';
   else if (s.phase === 'dealer') t = s.dealer.id ? `Juega la banca: ${esc(s.dealer.name)}<span class="timer"></span>` : 'Juega la banca...';
-  else if (m.status === 'bust') t = `Te has pasado con ${m.value}`;
-  else if (m.status === 'blackjack') t = '¡Blackjack!';
-  else if (m.status === 'stand') t = `Te plantas con ${m.value}`;
-  else {
+  else if (s.turn !== myId && m.hands.length) {
+    const hs = m.hands.map(h => h.status === 'bust' ? `pasado (${h.value})` : h.status === 'blackjack' ? 'blackjack' : h.status === 'stand' ? `${h.value}` : '…');
+    const tp = s.players.find(p => p.id === s.turn);
+    t = (m.hands.length > 1 ? `Tus manos: ${hs.join(' · ')}` : m.hands[0].status === 'bust' ? `Te has pasado con ${m.hands[0].value}` : m.hands[0].status === 'blackjack' ? '¡Blackjack!' : `Te plantas con ${m.hands[0].value}`)
+      + (tp ? `<small>Turno de ${esc(tp.name)}</small>` : '');
+  } else {
     const tp = s.players.find(p => p.id === s.turn);
     t = tp ? `Turno de ${esc(tp.name)}<span class="timer"></span>` : '';
   }
@@ -345,8 +409,9 @@ function renderHud() {
     const dealer = amDealer();
     $('#m-label').textContent = dealer ? 'BANCA' : 'FICHAS';
     $('#m-chips').textContent = m.chips;
-    $('#m-bet').textContent = !dealer && (m.ready || m.status !== 'idle') ? m.bet : 0;
-    $('#m-waivers').textContent = m.waivers ? '✎'.repeat(Math.min(m.waivers, 8)) : '—';
+    const totalBet = m.hands.length ? m.hands.reduce((a, h) => a + h.bet, 0) : m.bet;
+    $('#m-bet').textContent = !dealer && (m.ready || m.status !== 'idle') ? totalBet : 0;
+    $('#m-waivers').textContent = m.eliminated ? '☠' : `${'✎'.repeat(m.waivers)}${'·'.repeat(MAX_WAIVERS - m.waivers)} ${m.waivers}/${MAX_WAIVERS}`;
     $('#monitor').classList.toggle('neg', m.chips < 0);
   }
   $('#panel-count').textContent = `${s.players.length}/${MAX_PLAYERS}`;
@@ -377,8 +442,12 @@ function renderPanel() {
 
   for (const p of [...s.players].sort((a, b) => a.seat - b.seat)) {
     const isDealer = p.id === s.dealer.id;
-    const role = isDealer ? '<span class="role dealer">BANCA</span>' : p.role === 'spectator' ? '<span class="role spect">MIRA</span>' : '';
+    const role = p.eliminated ? '<span class="role dealer">☠ FUERA</span>' : isDealer ? '<span class="role dealer">BANCA</span>' : p.role === 'spectator' ? '<span class="role spect">MIRA</span>' : '';
     const ctl = [];
+    if (p.eliminated) {
+      html += `<div class="prow" style="--c:${seatColor(p)}"><span class="dot"></span><span class="who">${esc(p.name)}${p.id === myId ? ' (TÚ)' : ''}${role}<small>Sin exenciones</small></span><span class="ctl"></span></div>`;
+      continue;
+    }
     if (isHost && many && !isDealer) ctl.push(`<button class="btn xs" data-p="dealer" data-id="${esc(p.id)}" ${dis}>Crupier</button>`);
     if ((isHost || p.id === myId) && !isDealer) {
       ctl.push(p.role === 'player'
@@ -427,14 +496,22 @@ function renderLabels() {
     const turn = s.turn === p.id;
     el.className = 'seat' + (p.id === myId ? ' me' : '') + (turn ? ' turn' : '') + (p.role === 'spectator' ? ' spect' : '');
     let tag = '';
-    const tagCls = p.result || p.status;
-    if (p.role === 'spectator') tag = 'MIRANDO';
+    const one = p.hands.length === 1 ? p.hands[0] : null;
+    const tagCls = p.result || (one ? one.status : p.status);
+    if (p.eliminated) tag = '☠ ELIMINADO';
+    else if (p.role === 'spectator') tag = 'MIRANDO';
     else if (s.phase === 'betting') tag = p.chips < MIN_BET ? 'SIN FICHAS' : p.ready ? `APUESTA ${p.bet}` : 'PENSANDO...';
     else if (p.status === 'idle') tag = 'ESPERA';
+    else if (p.result && p.hands.length > 1) tag = p.hands.map(h => RESULT_TXT[h.result]).join(' · ') + ' ' + (p.delta ? signed(p.delta) : '±0');
     else if (p.result) tag = RESULT_TXT[p.result] + (p.delta ? ' ' + signed(p.delta) : '');
-    else tag = STATUS_TXT[p.status] || (turn ? 'JUGANDO' : '');
-    const soft = p.soft && p.value < 21 && p.status === 'playing' ? `<small>/${p.value - 10}</small>` : '';
-    const val = p.hand.length ? `<div class="val">${p.value}${soft}</div>` : '<div class="val">&nbsp;</div>';
+    else if (one) tag = STATUS_TXT[one.status] || (turn ? 'JUGANDO' : '');
+    else tag = turn ? `MANO ${p.active + 1}/${p.hands.length}` : `${p.hands.length} MANOS`;
+    const handVal = (h, i) => {
+      const soft = h.soft && h.value < 21 && h.status === 'playing' ? `<small>/${h.value - 10}</small>` : '';
+      const cls = h.status === 'bust' ? 'bust' : turn && i === p.active ? 'act' : '';
+      return `<span class="${cls}">${h.value}${soft}</span>`;
+    };
+    const val = p.hands.length ? `<div class="val">${p.hands.map(handVal).join('<i>·</i>')}</div>` : '<div class="val">&nbsp;</div>';
     el.innerHTML = `${val}<div class="nm">${turn ? '▶ ' : ''}${esc(p.name)}</div><div class="tag ${tagCls}">${tag}</div><div class="sub">◈ ${p.chips}</div>`;
   });
 
@@ -481,7 +558,8 @@ function act(a, v) {
     case 'all': betAmount = m.chips; sfx.chip(); renderHud(); break;
     case 'bet': sendMsg({ t: 'bet', amount: betAmount }); break;
     case 'deal': sendMsg({ t: 'deal' }); break;
-    case 'hit': case 'stand': case 'double': sendMsg({ t: 'act', a }); break;
+    case 'hit': case 'stand': case 'double': case 'split': sendMsg({ t: 'act', a }); break;
+    case 'restart': backToLobby(); break;
     case 'dhit': sendMsg({ t: 'dact', a: 'hit' }); break;
     case 'dstand': sendMsg({ t: 'dact', a: 'stand' }); break;
     case 'waiver': sendMsg({ t: 'waiver' }); sfx.thump(); break;
@@ -509,7 +587,8 @@ addEventListener('keydown', e => {
   if (s.phase === 'playing' && s.turn === myId) {
     if (k === 'h') act('hit');
     else if (k === 's') act('stand');
-    else if (k === 'd' && m.hand.length === 2 && m.chips >= m.bet) act('double');
+    else if (k === 'd' && m.canDouble) act('double');
+    else if (k === 'p' && m.canSplit) act('split');
   } else if (s.phase === 'betting' && m.role === 'player' && !m.ready && m.chips >= MIN_BET && (k === 'enter' || k === ' ')) {
     e.preventDefault();
     act('bet');

@@ -4,8 +4,11 @@ import * as THREE from 'three';
 import * as T from './textures.js';
 import { SEATS, TABLE_W, TABLE_D, TABLE_R, ARC_CZ, BACK_Z, DEALER_CARDS_Z } from './layout.js';
 
-const RENDER_HEIGHT = 540;
-const CARD_W = 0.34, CARD_H = 0.48;
+const RETRO_HEIGHT = 420;
+const CARD_W = 0.36, CARD_H = 0.5;
+const HAND_GAP = 0.4;
+const GUN_REST = new THREE.Vector3(0.35, -0.7, -1.5);
+const GUN_AIM = new THREE.Vector3(0.25, 0.62, -1.05);
 const SHOE = new THREE.Vector3(1.55, 0.2, -0.95);
 const DISCARD = new THREE.Vector3(-1.6, 0.06, -0.95);
 const DEALER_Z = -1.95;
@@ -29,10 +32,10 @@ function dShape(r, backZ) {
 
 export class Scene3D {
   constructor(canvas) {
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: false });
-    this.renderer.setPixelRatio(1);
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.BasicShadowMap;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.retro = false;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.2;
 
@@ -68,8 +71,15 @@ export class Scene3D {
 
   resize() {
     const w = innerWidth, h = innerHeight;
-    const k = Math.min(1, RENDER_HEIGHT / h);
-    this.renderer.setSize(Math.round(w * k), Math.round(h * k), false);
+    if (this.retro) {
+      // Modo retro: render a baja resolución escalado con píxeles duros.
+      const k = Math.min(1, RETRO_HEIGHT / h);
+      this.renderer.setPixelRatio(1);
+      this.renderer.setSize(Math.round(w * k), Math.round(h * k), false);
+    } else {
+      this.renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 1.5));
+      this.renderer.setSize(w, h, false);
+    }
     this.camera.aspect = w / h;
     // En vertical (móvil) abrimos el campo de visión para que quepa la mesa.
     const need = 2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(40)) / this.camera.aspect);
@@ -209,6 +219,7 @@ export class Scene3D {
 
     this.buildDealer();
     this.buildDust();
+    this.buildGun();
 
     // Anillos de asiento: tu sitio y el turno.
     this.rings = SEATS.map(seat => {
@@ -377,16 +388,23 @@ export class Scene3D {
     state.dealer.hand.forEach((c, i) => {
       wanted.set(c.id, { c, pos: new THREE.Vector3((i - (dn - 1) / 2) * dStep, 0.004 + i * 0.002, DEALER_CARDS_Z), rotY: 0 });
     });
+    // Cartas de cada mano en cascada (la esquina superior izquierda queda a la vista);
+    // las manos separadas se colocan una al lado de otra.
     for (const p of state.players) {
       const seat = SEATS[p.seat];
-      const n = p.hand.length;
       const cr = Math.cos(seat.rot), sr = Math.sin(seat.rot);
-      p.hand.forEach((c, i) => {
-        const lx = (i - (n - 1) / 2) * 0.12, lz = -i * 0.02;
-        wanted.set(c.id, {
-          c,
-          pos: new THREE.Vector3(seat.x + lx * cr + lz * sr, 0.004 + i * 0.003, seat.z - lx * sr + lz * cr),
-          rotY: seat.rot,
+      const H = p.hands.length;
+      p.hands.forEach((hand, hi) => {
+        const n = hand.cards.length;
+        const hx = (hi - (H - 1) / 2) * HAND_GAP;
+        hand.cards.forEach((c, i) => {
+          const lx = hx + (i - (n - 1) / 2) * 0.085;
+          const lz = (i - (n - 1) / 2) * 0.06;
+          wanted.set(c.id, {
+            c,
+            pos: new THREE.Vector3(seat.x + lx * cr + lz * sr, 0.004 + i * 0.003, seat.z - lx * sr + lz * cr),
+            rotY: seat.rot,
+          });
         });
       });
     }
@@ -423,8 +441,9 @@ export class Scene3D {
     // Fichas apostadas.
     SEATS.forEach((seat, i) => {
       const p = state.players.find(x => x.seat === i);
-      const show = p && p.id !== state.dealer.id && p.bet > 0 && (p.ready || p.status !== 'idle');
-      const n = show ? Math.min(14, Math.max(1, Math.ceil(p.bet / 25))) : 0;
+      const total = p ? (p.hands.length ? p.hands.reduce((a, h) => a + h.bet, 0) : p.bet) : 0;
+      const show = p && p.id !== state.dealer.id && total > 0 && (p.ready || p.status !== 'idle');
+      const n = show ? Math.min(16, Math.max(1, Math.ceil(total / 25))) : 0;
       const st = this.chipStacks[i];
       const key = String(n);
       if (st.key === key) return;
@@ -457,7 +476,120 @@ export class Scene3D {
     const turnP = state.players.find(p => p.id === state.turn);
     const me = state.players.find(p => p.id === myId);
     const look = turnP || (state.phase === 'betting' || !me || me.id === state.dealer.id ? null : me);
-    this.gazeTarget = look ? Math.atan2(SEATS[look.seat].x, SEATS[look.seat].z - DEALER_Z) : 0;
+    if (!this.gunAnim) this.gazeTarget = look ? Math.atan2(SEATS[look.seat].x, SEATS[look.seat].z - DEALER_Z) : 0;
+  }
+
+  // Escopeta de dos cañones que el crupier saca de debajo de la mesa.
+  buildGun() {
+    const g = this.gun = new THREE.Group();
+    const metal = new THREE.MeshPhongMaterial({ color: 0x2a2b30, specular: 0x999999, shininess: 80 });
+    const wood = new THREE.MeshLambertMaterial({ color: 0x4a2a16 });
+    const body = this.gunBody = new THREE.Group();
+    g.add(body);
+    for (const x of [-0.028, 0.028]) {
+      const b = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 0.85, 12), metal);
+      b.rotation.x = Math.PI / 2;
+      b.position.set(x, 0, 0.42);
+      body.add(b);
+    }
+    const recv = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.1, 0.22), metal);
+    recv.position.set(0, -0.01, -0.08);
+    const pump = new THREE.Mesh(new THREE.CylinderGeometry(0.042, 0.042, 0.22, 10), wood);
+    pump.rotation.x = Math.PI / 2;
+    pump.position.set(0, -0.05, 0.3);
+    const stock = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.14, 0.42), wood);
+    stock.position.set(0, -0.07, -0.38);
+    stock.rotation.x = 0.18;
+    body.add(recv, pump, stock);
+    this.flashMat = new THREE.MeshBasicMaterial({ color: 0xffd27a, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false });
+    const flash = new THREE.Mesh(new THREE.SphereGeometry(0.12, 10, 8), this.flashMat);
+    flash.scale.set(1, 1, 2.2);
+    flash.position.set(0, 0, 1.0);
+    body.add(flash);
+    this.gunLight = new THREE.PointLight(0xffb060, 0, 7, 2);
+    this.gunLight.position.set(0, 0, 1.0);
+    body.add(this.gunLight);
+    g.traverse(o => { o.castShadow = true; });
+    g.scale.setScalar(1.4);
+    g.visible = false;
+    this.scene.add(g);
+    this.gunAnim = null;
+  }
+
+  // target: punto al que apunta (null = sin escopeta). onFire se llama al disparar.
+  shoot(target, onFire) {
+    if (!target) { setTimeout(onFire, 600); return; }
+    const restQ = new THREE.Quaternion(), aimQ = new THREE.Quaternion();
+    const dummy = new THREE.Object3D();
+    dummy.position.copy(GUN_REST);
+    dummy.lookAt(GUN_REST.x, GUN_REST.y - 1, GUN_REST.z + 1);
+    restQ.copy(dummy.quaternion);
+    dummy.position.copy(GUN_AIM);
+    dummy.lookAt(target);
+    aimQ.copy(dummy.quaternion);
+    this.gunAnim = { t0: this.clock.elapsedTime, restQ, aimQ, onFire, fired: false };
+    this.gazeTarget = Math.atan2(target.x, target.z - DEALER_Z);
+  }
+
+  shake(amp, dur) {
+    this.shakeAmp = amp;
+    this.shakeDur = dur;
+    this.shakeEnd = this.clock.elapsedTime + dur;
+  }
+
+  setRetro(on) {
+    this.retro = on;
+    this.resize();
+  }
+
+  seatTarget(seat) {
+    const s = SEATS[seat];
+    return new THREE.Vector3(s.x + s.out.x * 0.9, 1.0, s.z + s.out.z * 0.9);
+  }
+
+  cameraTarget() {
+    return CAM_POS.clone();
+  }
+
+  updateGun(t) {
+    const a = this.gunAnim, g = this.gun, body = this.gunBody;
+    const e = t - a.t0;
+    g.visible = true;
+    if (e < 0.9) {
+      const k = ease(e / 0.9);
+      g.position.lerpVectors(GUN_REST, GUN_AIM, k);
+      g.quaternion.slerpQuaternions(a.restQ, a.aimQ, k);
+    } else if (e < 2.3) {
+      g.position.copy(GUN_AIM);
+      g.position.y += Math.sin(t * 23) * 0.002;
+      g.quaternion.copy(a.aimQ);
+    } else if (e < 3.0) {
+      const k = ease((e - 2.3) / 0.7);
+      g.position.lerpVectors(GUN_AIM, GUN_REST, k);
+      g.quaternion.slerpQuaternions(a.aimQ, a.restQ, k);
+    } else {
+      g.visible = false;
+      this.gunAnim = null;
+      this.flashMat.opacity = 0;
+      this.gunLight.intensity = 0;
+      return;
+    }
+    if (!a.fired && e >= 1.3) {
+      a.fired = true;
+      a.fireT = t;
+      if (a.onFire) a.onFire();
+    }
+    if (a.fired) {
+      const r = t - a.fireT;
+      const k = Math.max(0, 1 - r / 0.35);
+      body.position.z = -0.12 * k;
+      body.rotation.x = -0.35 * k;
+      this.flashMat.opacity = r < 0.07 ? 1 : 0;
+      this.gunLight.intensity = r < 0.09 ? 80 : 0;
+    } else {
+      body.position.z = 0;
+      body.rotation.x = 0;
+    }
   }
 
   project(x, y, z) {
@@ -471,6 +603,13 @@ export class Scene3D {
 
     this.camera.position.set(CAM_POS.x + this.mouse.x * 0.18, CAM_POS.y - this.mouse.y * 0.08 + Math.sin(t * 0.6) * 0.01, CAM_POS.z);
     this.camera.lookAt(CAM_LOOK.x + this.mouse.x * 0.1, CAM_LOOK.y - this.mouse.y * 0.06, CAM_LOOK.z);
+    if (this.shakeEnd && t < this.shakeEnd) {
+      const k = (this.shakeEnd - t) / this.shakeDur * this.shakeAmp;
+      this.camera.position.x += (Math.random() - 0.5) * k;
+      this.camera.position.y += (Math.random() - 0.5) * k;
+      this.camera.rotation.z += (Math.random() - 0.5) * k * 0.5;
+    }
+    if (this.gunAnim) this.updateGun(t);
 
     // Parpadeo ocasional de la lámpara.
     if (t > this.nextFlicker) {

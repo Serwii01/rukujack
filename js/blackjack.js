@@ -4,16 +4,22 @@
 // El crupier puede ser la IA (dealerId = null) o cualquier jugador. Un crupier
 // humano es la banca: cobra y paga con sus fichas. Debe pedir con 16 o menos,
 // pero con 17 o más decide él si se planta o arriesga.
+//
+// Cada jugador juega una o varias manos (al separar parejas). Quien se queda
+// sin fichas puede firmar hasta MAX_WAIVERS exenciones; sin ellas, queda eliminado.
 
 export const START_CHIPS = 500;
 export const MIN_BET = 10;
 export const MAX_PLAYERS = 6;
+export const MAX_HANDS = 3;
+export const MAX_WAIVERS = 3;
 export const HOST_ID = 'host';
 
 const TURN_MS = 30000;
 const BET_MS = 20000;
 const DEALER_MS = 20000;
 const RESULT_MS = 5000;
+const SHOT_EXTRA_MS = 4500;
 const DEAL_STEP = 300;
 const DEALER_STEP = 800;
 const SEAT_ORDER = [2, 3, 1, 4, 0, 5];
@@ -31,13 +37,15 @@ const LINES = {
   dealerBJ: ['Blackjack de la banca.', 'Veintiuno. La casa gana.'],
   dealerBust: ['La banca se pasa.', 'Me he pasado. Disfrutadlo.', 'Pasada. No os acostumbréis.'],
   bust: n => [`${n} se pasa.`, `Demasiado, ${n}.`],
-  bj: n => [`Blackjack para ${n}.`],
+  split: n => [`${n} separa.`, `${n} divide la apuesta. Valiente.`],
   turn: n => [`Tu turno, ${n}.`, `${n}, ¿pides o te plantas?`, `${n}, decide.`],
   humanDealer: n => [`${n}, la banca es tuya. Juega tu mano.`],
-  waiver: n => [`${n} firma otra exención.`, `${n} vuelve a firmar.`],
+  waiver: (n, left) => [`${n} firma otra exención. Le quedan ${left}.`],
+  lastWaiver: n => [`${n} firma su última exención. No habrá más.`],
   join: n => [`${n} se sienta a la mesa.`],
   newDealer: n => [`${n} toma la banca.`, `${n} es ahora el crupier.`],
   aiDealer: ['La casa vuelve a repartir.'],
+  shot: n => [`${n} no tiene más exenciones.`, `Se acabó para ${n}.`],
 };
 
 export function makeShoe(decks = 6) {
@@ -68,6 +76,17 @@ export function handValue(cards, includeHidden = false) {
   return { total, soft: aces > 0 };
 }
 
+export function canSplit(p) {
+  const h = p.hands[p.active];
+  return !!h && h.cards.length === 2 && p.hands.length < MAX_HANDS && p.chips >= h.bet
+    && cardValue(h.cards[0].r) === cardValue(h.cards[1].r);
+}
+
+export function canDouble(p) {
+  const h = p.hands[p.active];
+  return !!h && h.cards.length === 2 && p.chips >= h.bet;
+}
+
 export class Table {
   constructor(onChange) {
     this.onChange = onChange;
@@ -79,18 +98,19 @@ export class Table {
     this.phase = 'betting';
     this.turn = null;
     this.order = [];
-    this.turnIdx = -1;
+    this.turnIdx = 0;
     this.shoe = makeShoe();
     this.cardSeq = 0;
     this.round = 0;
     this.deadline = 0;
     this.timer = null;
+    this.shots = [];
     this.message = pick(LINES.betting);
   }
 
   get(id) { return this.players.find(p => p.id === id); }
   emit() { this.onChange(this.snapshot()); }
-  isBettor(p) { return p.role === 'player' && p.id !== this.dealerId; }
+  isBettor(p) { return p.role === 'player' && !p.eliminated && p.id !== this.dealerId; }
   humanDealer() { return this.dealerId ? this.get(this.dealerId) : null; }
 
   draw(hidden = false) {
@@ -113,7 +133,7 @@ export class Table {
     const seat = SEAT_ORDER.find(s => !used.has(s));
     this.players.push({
       id, name, seat, role: 'player', chips: START_CHIPS, bet: 0, ready: false,
-      hand: [], status: 'idle', result: null, delta: 0, waivers: 0,
+      hands: [], active: 0, status: 'idle', result: null, delta: 0, waivers: 0, eliminated: false,
     });
     if (this.players.length > 1) this.message = pick(LINES.join(name));
     this.emit();
@@ -136,10 +156,10 @@ export class Table {
 
   setDealer(byId, target) {
     if (byId !== HOST_ID || this.phase !== 'betting') return;
-    if (target !== null && !this.get(target)) return;
+    const p = target !== null ? this.get(target) : null;
+    if (target !== null && (!p || p.eliminated)) return;
     if (target === this.dealerId) return;
     this.dealerId = target;
-    const p = target && this.get(target);
     if (p) { p.ready = false; this.message = pick(LINES.newDealer(p.name)); }
     else this.message = pick(LINES.aiDealer);
     if (!this.checkAllReady()) this.emit();
@@ -149,7 +169,7 @@ export class Table {
     if (this.phase !== 'betting' || !['player', 'spectator'].includes(role)) return;
     if (byId !== HOST_ID && byId !== target) return;
     const p = this.get(target);
-    if (!p || p.role === role) return;
+    if (!p || p.role === role || p.eliminated) return;
     p.role = role;
     p.ready = false;
     this.message = role === 'spectator' ? `${p.name} se levanta a mirar.` : `${p.name} vuelve a apostar.`;
@@ -158,11 +178,12 @@ export class Table {
 
   waiver(id) {
     const p = this.get(id);
-    if (!p || p.chips >= MIN_BET || p.status !== 'idle') return;
-    if (this.dealerId === id && this.phase !== 'betting') return;
+    if (!p || p.eliminated || p.chips >= MIN_BET || p.status !== 'idle' || p.waivers >= MAX_WAIVERS) return;
+    if (this.phase !== 'betting') return;
     p.chips += START_CHIPS;
     p.waivers++;
-    this.message = pick(LINES.waiver(p.name));
+    const left = MAX_WAIVERS - p.waivers;
+    this.message = left ? pick(LINES.waiver(p.name, left)) : pick(LINES.lastWaiver(p.name));
     this.emit();
   }
 
@@ -208,17 +229,20 @@ export class Table {
     this.message = pick(LINES.dealing);
     this.dealer.hand = [];
     this.dealerDelta = 0;
+    this.shots = [];
     for (const p of this.players) {
-      p.hand = []; p.result = null; p.delta = 0;
-      p.status = inRound.includes(p) ? 'playing' : 'idle';
-      if (p.status === 'playing') p.chips -= p.bet;
+      p.result = null; p.delta = 0; p.active = 0;
+      const playing = inRound.includes(p);
+      p.status = playing ? 'in' : 'idle';
+      p.hands = playing ? [{ cards: [], bet: p.bet, status: 'playing', result: null, delta: 0 }] : [];
+      if (playing) p.chips -= p.bet;
     }
     this.emit();
     await wait(400);
 
     for (let k = 0; k < 2; k++) {
       for (const p of inRound) {
-        p.hand.push(this.draw());
+        p.hands[0].cards.push(this.draw());
         this.emit();
         await wait(DEAL_STEP);
       }
@@ -228,7 +252,7 @@ export class Table {
     }
 
     for (const p of inRound) {
-      if (handValue(p.hand).total === 21) p.status = 'blackjack';
+      if (handValue(p.hands[0].cards).total === 21) p.hands[0].status = 'blackjack';
     }
     if (handValue(this.dealer.hand, true).total === 21) {
       this.dealer.hand.forEach(c => { c.hidden = false; });
@@ -238,21 +262,26 @@ export class Table {
     }
     this.phase = 'playing';
     this.order = inRound.map(p => p.id);
-    this.turnIdx = -1;
+    this.turnIdx = 0;
     this.advance();
   }
 
+  // Busca la siguiente mano pendiente: primero del jugador actual, luego del siguiente.
   advance() {
     this.setTimer(0);
-    while (++this.turnIdx < this.order.length) {
+    while (this.turnIdx < this.order.length) {
       const p = this.get(this.order[this.turnIdx]);
-      if (p && p.status === 'playing') {
+      const h = p ? p.hands.findIndex(x => x.status === 'playing') : -1;
+      if (h !== -1) {
+        const changed = this.turn !== p.id;
+        p.active = h;
         this.turn = p.id;
-        this.message = pick(LINES.turn(p.name));
+        if (changed) this.message = pick(LINES.turn(p.name));
         this.startTurnTimer(p);
         this.emit();
         return;
       }
+      this.turnIdx++;
     }
     this.turn = null;
     this.dealerPlay();
@@ -267,25 +296,41 @@ export class Table {
   action(id, a) {
     if (this.phase !== 'playing' || this.turn !== id) return;
     const p = this.get(id);
-    if (!p) return;
+    const h = p && p.hands[p.active];
+    if (!h || h.status !== 'playing') return;
 
     if (a === 'hit') {
-      p.hand.push(this.draw());
-      const v = handValue(p.hand).total;
-      if (v > 21) { p.status = 'bust'; this.message = pick(LINES.bust(p.name)); this.advance(); }
-      else if (v === 21) { p.status = 'stand'; this.advance(); }
+      h.cards.push(this.draw());
+      const v = handValue(h.cards).total;
+      if (v > 21) { h.status = 'bust'; this.message = pick(LINES.bust(p.name)); this.advance(); }
+      else if (v === 21) { h.status = 'stand'; this.advance(); }
       else { this.startTurnTimer(p); this.emit(); }
     } else if (a === 'stand') {
-      p.status = 'stand';
+      h.status = 'stand';
       this.advance();
     } else if (a === 'double') {
-      if (p.hand.length !== 2 || p.chips < p.bet) return;
-      p.chips -= p.bet;
-      p.bet *= 2;
-      p.hand.push(this.draw());
-      if (handValue(p.hand).total > 21) { p.status = 'bust'; this.message = pick(LINES.bust(p.name)); }
-      else p.status = 'stand';
+      if (!canDouble(p)) return;
+      p.chips -= h.bet;
+      h.bet *= 2;
+      h.cards.push(this.draw());
+      if (handValue(h.cards).total > 21) { h.status = 'bust'; this.message = pick(LINES.bust(p.name)); }
+      else h.status = 'stand';
       this.advance();
+    } else if (a === 'split') {
+      if (!canSplit(p)) return;
+      p.chips -= h.bet;
+      const [c1, c2] = h.cards;
+      const aces = c1.r === 'A';
+      h.cards = [c1, this.draw()];
+      const nh = { cards: [c2, this.draw()], bet: h.bet, status: 'playing', result: null, delta: 0 };
+      p.hands.splice(p.active + 1, 0, nh);
+      // Con ases separados solo se recibe una carta por mano.
+      for (const x of [h, nh]) {
+        if (aces || handValue(x.cards).total === 21) x.status = 'stand';
+      }
+      this.message = pick(LINES.split(p.name));
+      if (h.status !== 'playing') this.advance();
+      else { this.startTurnTimer(p); this.emit(); }
     }
   }
 
@@ -300,7 +345,7 @@ export class Table {
     this.emit();
     await wait(DEALER_STEP);
 
-    const someoneStands = this.players.some(p => this.order.includes(p.id) && p.status === 'stand');
+    const someoneStands = this.players.some(p => this.order.includes(p.id) && p.hands.some(h => h.status === 'stand'));
     if (!someoneStands) { this.finishDealer(); return; }
 
     const human = this.humanDealer();
@@ -361,20 +406,25 @@ export class Table {
     let houseNet = 0;
     for (const p of this.players) {
       if (p.status === 'idle') continue;
-      const v = handValue(p.hand).total;
-      let res;
-      if (p.status === 'bust') res = 'lose';
-      else if (p.status === 'blackjack') res = dealerBJ ? 'push' : 'bj';
-      else if (dealerBJ) res = 'lose';
-      else if (d > 21 || v > d) res = 'win';
-      else if (v === d) res = 'push';
-      else res = 'lose';
+      p.delta = 0;
+      for (const h of p.hands) {
+        const v = handValue(h.cards).total;
+        let res;
+        if (h.status === 'bust') res = 'lose';
+        else if (h.status === 'blackjack') res = dealerBJ ? 'push' : 'bj';
+        else if (dealerBJ) res = 'lose';
+        else if (d > 21 || v > d) res = 'win';
+        else if (v === d) res = 'push';
+        else res = 'lose';
 
-      if (res === 'bj') { const w = Math.floor(p.bet * 1.5); p.chips += p.bet + w; p.delta = w; }
-      else if (res === 'win') { p.chips += p.bet * 2; p.delta = p.bet; }
-      else if (res === 'push') { p.chips += p.bet; p.delta = 0; }
-      else p.delta = -p.bet;
-      p.result = res;
+        if (res === 'bj') { const w = Math.floor(h.bet * 1.5); p.chips += h.bet + w; h.delta = w; }
+        else if (res === 'win') { p.chips += h.bet * 2; h.delta = h.bet; }
+        else if (res === 'push') { p.chips += h.bet; h.delta = 0; }
+        else h.delta = -h.bet;
+        h.result = res;
+        p.delta += h.delta;
+      }
+      p.result = p.hands.length === 1 ? p.hands[0].result : p.delta > 0 ? 'win' : p.delta < 0 ? 'lose' : 'push';
       houseNet -= p.delta;
     }
     // Un crupier humano es la banca: gana lo que pierden los demás y viceversa.
@@ -382,11 +432,24 @@ export class Table {
     if (human) human.chips += houseNet;
     this.dealerDelta = houseNet;
 
+    // Bancarrota sin exenciones: eliminado.
+    this.shots = [];
+    for (const p of this.players) {
+      if (p.eliminated || p.chips >= MIN_BET || p.waivers < MAX_WAIVERS) continue;
+      if (p.status === 'idle' && p.id !== this.dealerId) continue;
+      p.eliminated = true;
+      p.role = 'spectator';
+      p.ready = false;
+      this.shots.push(p.id);
+      if (this.dealerId === p.id) this.dealerId = null;
+    }
+    if (this.shots.length) this.message = pick(LINES.shot(this.shots.map(id => this.get(id).name).join(' y ')));
+
     this.dealerWaiting = false;
     this.phase = 'result';
     this.turn = null;
     this.emit();
-    this.setTimer(RESULT_MS, () => this.newRound());
+    this.setTimer(RESULT_MS + (this.shots.length ? SHOT_EXTRA_MS : 0), () => this.newRound());
   }
 
   newRound() {
@@ -395,8 +458,9 @@ export class Table {
     this.dealer.hand = [];
     this.dealerDelta = 0;
     this.order = [];
+    this.shots = [];
     for (const p of this.players) {
-      p.hand = []; p.status = 'idle'; p.ready = false; p.result = null; p.delta = 0;
+      p.hands = []; p.active = 0; p.status = 'idle'; p.ready = false; p.result = null; p.delta = 0;
       if (p.bet > p.chips) p.bet = Math.max(0, p.chips);
     }
     this.message = pick(LINES.betting);
@@ -411,6 +475,7 @@ export class Table {
       turn: this.turn,
       message: this.message,
       round: this.round,
+      shots: this.shots.slice(),
       remaining: this.deadline && this.phase !== 'result' ? Math.max(0, this.deadline - Date.now()) : 0,
       dealer: {
         id: human ? human.id : null,
@@ -421,15 +486,20 @@ export class Table {
         waiting: this.dealerWaiting,
         delta: this.dealerDelta,
       },
-      players: this.players.map(p => {
-        const v = handValue(p.hand);
-        return {
-          id: p.id, name: p.name, seat: p.seat, role: p.role, chips: p.chips, bet: p.bet, ready: p.ready,
-          status: p.status, result: p.result, delta: p.delta, waivers: p.waivers,
-          hand: p.hand.map(c => ({ id: c.id, r: c.r, s: c.s })),
-          value: v.total, soft: v.soft,
-        };
-      }),
+      players: this.players.map(p => ({
+        id: p.id, name: p.name, seat: p.seat, role: p.role, chips: p.chips, bet: p.bet, ready: p.ready,
+        status: p.status, result: p.result, delta: p.delta, waivers: p.waivers, eliminated: p.eliminated,
+        active: p.active,
+        canSplit: this.phase === 'playing' && this.turn === p.id && canSplit(p),
+        canDouble: this.phase === 'playing' && this.turn === p.id && canDouble(p),
+        hands: p.hands.map(h => {
+          const v = handValue(h.cards);
+          return {
+            cards: h.cards.map(c => ({ id: c.id, r: c.r, s: c.s })),
+            bet: h.bet, status: h.status, result: h.result, delta: h.delta, value: v.total, soft: v.soft,
+          };
+        }),
+      })),
     };
   }
 }

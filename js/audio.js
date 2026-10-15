@@ -111,4 +111,21 @@ export const sfx = {
   buzz: play(() => { tone(100, 0.2, { type: 'sawtooth', gain: 0.035 }); tone(150, 0.18, { type: 'square', gain: 0.015 }); }),
   type: play(() => { noise(0.02, { freq: 3200, q: 2, gain: 0.05 }); }),
   thump: play(() => { tone(55, 0.6, { gain: 0.6, slide: 0.5 }); noise(0.2, { type: 'lowpass', freq: 300, gain: 0.3 }); }),
+  // Corredera de la escopeta: "chk-chk".
+  pump: play(() => {
+    for (const at of [0, 0.22]) {
+      noise(0.06, { freq: 1800, q: 3, gain: 0.6, at });
+      tone(320, 0.05, { type: 'square', gain: 0.08, at });
+      noise(0.04, { type: 'highpass', freq: 4000, gain: 0.25, at: at + 0.05 });
+    }
+  }),
+  // Disparo: golpe seco, cuerpo grave y cola de eco.
+  gunshot: play(() => {
+    noise(0.5, { type: 'lowpass', freq: 4000, gain: 1.2 });
+    noise(0.12, { type: 'highpass', freq: 2500, gain: 0.8 });
+    tone(80, 0.6, { gain: 1.0, slide: 0.35 });
+    noise(1.8, { type: 'lowpass', freq: 500, gain: 0.35, at: 0.05 });
+  }),
+  // Pitido de oídos para quien recibe el disparo.
+  ring: play(() => { tone(3600, 3.5, { gain: 0.05 }); }),
 };

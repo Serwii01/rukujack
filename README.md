@@ -1,6 +1,6 @@
 # RUKUJACK — Blackjack online
 
-Blackjack multijugador para **1 a 6 jugadores** en el navegador. Estética de sala oscura con neones, lámpara colgante que parpadea, crupier enmascarado con visera luminosa y render pixelado de baja resolución (con un guiño a *Buckshot Roulette*).
+Blackjack multijugador para **1 a 6 jugadores** en el navegador. Estética de sala oscura con neones, lámpara colgante que parpadea, crupier enmascarado con visera luminosa y una escopeta bajo la mesa para quien se arruine del todo (con un guiño a *Buckshot Roulette*).
 
 Es una **web 100 % estática**: no necesita servidor, base de datos ni pagar nada.
 
@@ -60,13 +60,18 @@ Después abre http://localhost:8080. Para probar el multijugador, abre una mesa 
 
 ## Reglas
 
-- 6 barajas. Blackjack paga 3 a 2. Doblar solo con las dos primeras cartas. No hay separar ni seguro.
+- 6 barajas. Blackjack paga 3 a 2. Doblar con las dos primeras cartas de cada mano (también tras separar). No hay seguro.
+- **Separar**: con dos cartas del mismo valor (8-8, K-10…) puedes partir la mano en dos, poniendo otra apuesta igual. Hasta 3 manos por jugador. Al separar ases, cada mano recibe solo una carta más. Un 21 tras separar no cuenta como blackjack.
 - La casa (IA) pide hasta llegar a 17. El crupier humano debe pedir con 16 o menos y decide con 17 o más.
 - Apuesta mínima: 10. Empiezas con 500 fichas.
-- Si te quedas sin fichas, puedes **firmar otra exención** para recibir 500 más. Las exenciones firmadas quedan a la vista.
+- **Exenciones**: si te quedas sin fichas, puedes firmar una exención para recibir 500 más. **Solo hay 3.** Si te arruinas sin exenciones, el crupier saca la escopeta y quedas **eliminado**: ya solo puedes mirar.
 - En multijugador hay 20 s para apostar (desde la primera apuesta) y 30 s por turno. Si se acaba el tiempo, te plantas automáticamente.
 
-Teclas: `H` pedir · `S` plantarse · `D` doblar · `Enter` apostar (o repartir, si eres el crupier).
+Teclas: `H` pedir · `S` plantarse · `D` doblar · `P` separar · `Enter` apostar (o repartir, si eres el crupier).
+
+## Gráficos
+
+Por defecto se ve nítido, con texturas en alta resolución. El botón **Retro** (arriba a la derecha) activa el modo pixelado de baja resolución. La elección se guarda en el navegador.
 
 ## Recursos y licencias
 
