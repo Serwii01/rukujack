@@ -365,3 +365,44 @@ export function deckEdge() {
   grain(ctx, 64, 128, 10);
   return toTex(c);
 }
+
+// Bocanada de humo: mancha suave con algo de textura.
+let smokeTex = null;
+export function smoke() {
+  if (smokeTex) return smokeTex;
+  const S = 128, [c, ctx] = mk(S, S);
+  for (let i = 0; i < 9; i++) {
+    const x = S / 2 + (Math.random() - 0.5) * 34, y = S / 2 + (Math.random() - 0.5) * 34, r = 26 + Math.random() * 24;
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, 'rgba(255,255,255,0.32)');
+    g.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, S, S);
+  }
+  smokeTex = toTex(c);
+  return smokeTex;
+}
+
+// Fogonazo: estrella de puntas irregulares.
+let flashTex = null;
+export function flash() {
+  if (flashTex) return flashTex;
+  const S = 256, [c, ctx] = mk(S, S);
+  ctx.translate(S / 2, S / 2);
+  const g = ctx.createRadialGradient(0, 0, 0, 0, 0, S / 2);
+  g.addColorStop(0, 'rgba(255,255,240,1)');
+  g.addColorStop(0.2, 'rgba(255,210,120,0.9)');
+  g.addColorStop(0.55, 'rgba(255,120,30,0.35)');
+  g.addColorStop(1, 'rgba(255,80,0,0)');
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  const n = 9;
+  for (let i = 0; i <= n * 2; i++) {
+    const a = i / (n * 2) * Math.PI * 2;
+    const r = i % 2 ? S * 0.12 : S * (0.3 + Math.random() * 0.2);
+    ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r);
+  }
+  ctx.fill();
+  flashTex = toTex(c);
+  return flashTex;
+}

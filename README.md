@@ -82,7 +82,7 @@ Teclas: `H` pedir · `S` plantarse · `D` doblar · `P` separar · `Enter` apost
 
 ## Gráficos
 
-Por defecto se ve nítido, con texturas en alta resolución, materiales PBR que reflejan los neones de la sala y *bloom* selectivo (solo brillan neones, visera, LED y detalles de acento). El crupier tiene brazos articulados que siguen a la mano al repartir. Las fichas apostadas se descomponen en denominaciones reales (10, 25, 50, 100, 500…) y se apilan en varias pilas según la cantidad. El botón **Retro** (arriba a la derecha) activa el modo pixelado de baja resolución. La elección se guarda en el navegador.
+Por defecto se ve nítido, con texturas en alta resolución, materiales PBR que reflejan los neones de la sala y *bloom* selectivo (solo brillan neones, visera, LED y detalles de acento). El crupier tiene brazos articulados que siguen a la mano al repartir. Cada jugador tiene su **personaje** sentado en un taburete (ropa, gorra, gafas y color de piel generados a partir de su id), que gesticula: golpecito en la mesa al pedir, gesto con la mano al plantarse, empuja las fichas al apostar, celebra al ganar, se lleva la mano a la cara al pasarse y se cae del taburete si recibe el disparo. La cámara se sitúa detrás de tu asiento, y **si haces de crupier ves la partida desde su visera** (con sus manos y tus cartas giradas hacia ti). La escopeta es de corredera: el crupier la coge con las dos manos, la recarga, apunta, dispara con fogonazo, retroceso y humo, y el cartucho vacío sale rebotando por la mesa. Las fichas apostadas se descomponen en denominaciones reales (10, 25, 50, 100, 500…) y se apilan en varias pilas según la cantidad. El botón **Retro** (arriba a la derecha) activa el modo pixelado de baja resolución. La elección se guarda en el navegador.
 
 ## Recursos y licencias
 
@@ -106,7 +106,10 @@ css/style.css       estilos: paneles de cristal, neón, efecto CRT suave
 js/main.js          une todo: lobby, HUD, panel de roles, red, entradas
 js/blackjack.js     reglas, roles y estado de la mesa (solo lo ejecuta el anfitrión)
 js/net.js           conexión P2P con PeerJS
-js/scene.js         escena 3D: mesa en D, crupier, cartas, luces
+js/scene.js         escena 3D: mesa en D, crupier, cartas, luces, cámara
+js/characters.js    personajes de los jugadores y sus gestos
+js/shotgun.js       escopeta, humo y cartuchos
+js/rig.js           IK de brazos y piernas compartida
 js/textures.js      texturas procedurales
 js/audio.js         efectos y ambiente sintetizados
 js/layout.js        posiciones y colores de los 6 asientos

@@ -298,7 +298,6 @@ function playShot(id) {
   if (!victim) return;
   const isMe = id === myId;
   const target = isMe ? scene.cameraTarget() : scene.seatTarget(victim.seat);
-  sfx.pump();
   const overlay = $('#shot');
   scene.shoot(target, () => {
     sfx.gunshot();
@@ -314,7 +313,7 @@ function playShot(id) {
       toast(`${victim.name} ha sido eliminado`);
       setTimeout(() => { overlay.className = ''; }, 200);
     }
-  });
+  }, { onPump: () => sfx.pump(), seat: isMe ? undefined : victim.seat });
 }
 
 $('#shot-close').onclick = () => { $('#shot').className = ''; };
@@ -634,7 +633,9 @@ function onChat(m, old) {
       $('#chat-unread').textContent = chatUnread > 9 ? '9+' : chatUnread;
     }
   }
-  const el = state && state.dealer.id === m.id ? dealerBubble : bubbleEls[m.seat];
+  const byDealer = !!state && state.dealer.id === m.id;
+  scene.talk(m.seat, byDealer);
+  const el = byDealer ? dealerBubble : bubbleEls[m.seat];
   if (!el) return;
   el.textContent = m.text.slice(0, 60) + (m.text.length > 60 ? '…' : '');
   el.style.setProperty('--c', SEATS[m.seat] ? SEATS[m.seat].color : '#fff');

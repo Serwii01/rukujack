@@ -8,12 +8,21 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import * as T from './textures.js';
 import { SEATS, TABLE_W, TABLE_D, TABLE_R, ARC_CZ, BACK_Z, DEALER_CARDS_Z } from './layout.js';
+import { limbMesh, poseLimb, ease as easeOut, smooth } from './rig.js';
+import { PlayerAvatar } from './characters.js';
+import { buildShotgun, Smoke, Shells } from './shotgun.js';
 
 const RETRO_HEIGHT = 420;
 const CARD_W = 0.36, CARD_H = 0.5;
 const HAND_GAP = 0.4;
-const GUN_REST = new THREE.Vector3(0.35, -0.7, -1.5);
-const GUN_AIM = new THREE.Vector3(0.25, 0.62, -1.05);
+// Escopeta: guardada bajo la mesa, preparada frente al pecho y encarada al hombro.
+const GUN_REST = new THREE.Vector3(0.3, -0.3, -1.62);
+const GUN_READY = new THREE.Vector3(0.12, 0.5, -1.4);
+const GUN_AIM = new THREE.Vector3(0.36, 0.74, -1.52);
+const ARM_UP = 0.7, ARM_FORE = 0.8;
+// Cámara del crupier (cuando juegas de banca): a la altura de su visera.
+const DEALER_CAM = new THREE.Vector3(0, 1.95, -1.8);
+const DEALER_LOOK = new THREE.Vector3(0, -0.15, 0.55);
 const CHIP_DENOMS = [
   { v: 500, color: '#7a3fc4' },
   { v: 100, color: '#17181d' },
@@ -26,7 +35,7 @@ const CHIP_DENOMS = [
 const STACK_MAX = 10;
 // Huecos para las pilas alrededor del círculo de apuesta (x lateral, z hacia el jugador).
 const STACK_SLOTS = [[0, 0], [0.165, 0.02], [-0.165, 0.02], [0.085, 0.15], [-0.085, 0.15], [0.25, 0.15], [-0.25, 0.15], [0, -0.15]];
-const SHOE_POS =new THREE.Vector3(1.6, 0, -0.95);
+const SHOE_POS = new THREE.Vector3(1.5, 0, -0.98);
 const SHOE_YAW = -0.95;               // la ranura mira hacia la mano del crupier
 const SHOE = new THREE.Vector3();     // de aquí sale cada carta (se calcula al construir el zapato)
 const DISCARD = new THREE.Vector3(-1.6, 0.06, -0.95);
@@ -79,8 +88,15 @@ export class Scene3D {
     this.nextFlicker = 6;
     this.flickerUntil = 0;
     this.reach = null;
+    this.sweep = null;
     this.dealerActive = false;
     this.visorColor = new THREE.Color(AI_COLOR);
+    this.avatars = SEATS.map(() => null);
+    this.prevState = null;
+    // Cámara: ángulo del asiento propio y mezcla con la vista del crupier (0..1).
+    this.view = { angle: 0, angleTarget: 0, mix: 0, mixTarget: 0 };
+    this.dealerPOV = false;
+    this.nextBlink = 3;
 
     this.buildEnv();
     this.build();
@@ -447,6 +463,7 @@ export class Scene3D {
     const s = this.scene;
     const std = o => new THREE.MeshStandardMaterial(o);
     const suit = std({ color: 0x1e1f29, roughness: 0.85, envMapIntensity: 0.2 });
+    const satin = std({ color: 0x15161d, roughness: 0.32, envMapIntensity: 0.6 });
     // Contraluz para recortar la silueta del crupier contra el fondo.
     const backLight = new THREE.SpotLight(0xb0a0ff, 25, 6, 0.6, 0.6, 2);
     backLight.position.set(0, 3.2, -3.6);
@@ -458,17 +475,29 @@ export class Scene3D {
     s.add(frontLight, frontLight.target);
     const shirt = std({ color: 0x0e0f13, roughness: 0.55 });
     const glove = std({ color: 0x141418, roughness: 0.35, metalness: 0.15 });
+    const cuffMat = std({ color: 0xcfd2da, roughness: 0.5 });
     this.accentMat = new THREE.MeshBasicMaterial({ color: AI_COLOR });
     const d = this.dealer = new THREE.Group();
     d.position.set(0, 0, DEALER_Z);
     s.add(d);
+    // El cuerpo (torso y cabeza) va aparte para poder ocultarlo en la vista del crupier.
+    const upper = this.dealerBody = new THREE.Group();
+    d.add(upper);
 
     // Torso torneado: cintura, pecho y hombros redondeados (achatado de delante a atrás).
-    const prof = [[0, -0.6], [0.42, -0.6], [0.4, -0.05], [0.47, 0.45], [0.56, 0.76], [0.54, 0.9], [0.4, 0.99], [0.16, 1.04], [0, 1.05]]
+    const prof = [[0, -0.6], [0.42, -0.6], [0.4, -0.05], [0.46, 0.45], [0.53, 0.74], [0.5, 0.88], [0.38, 0.98], [0.16, 1.04], [0, 1.05]]
       .map(([x, y]) => new THREE.Vector2(x, y));
-    const torso = new THREE.Mesh(new THREE.LatheGeometry(prof, 32), suit);
+    const torso = this.torso = new THREE.Mesh(new THREE.LatheGeometry(prof, 40), suit);
     torso.scale.set(1.28, 1, 0.72);
-    // Pechera: camisa en V con pajarita y botones de neón.
+    // Hombreras: dan forma de chaqueta y tapan la unión con los brazos.
+    for (const sx of [-1, 1]) {
+      const pad = new THREE.Mesh(new THREE.SphereGeometry(1, 20, 14), suit);
+      pad.scale.set(0.19, 0.13, 0.2);
+      pad.position.set(sx * 0.55, 0.86, 0.0);
+      pad.castShadow = true;
+      upper.add(pad);
+    }
+    // Pechera: camisa en V, chaleco, pajarita y botones de neón.
     const v = new THREE.Shape();
     v.moveTo(-0.15, 0.3); v.lineTo(0.15, 0.3); v.lineTo(0, -0.28); v.closePath();
     const front = new THREE.Mesh(new THREE.ShapeGeometry(v), shirt);
@@ -486,27 +515,46 @@ export class Scene3D {
       wing.position.x = -sx * 0.035;
       bow.add(wing);
     }
+    const knot = new THREE.Mesh(new THREE.SphereGeometry(0.014, 8, 6), this.accentMat);
+    bow.add(knot);
     bow.position.set(0, 0.97, 0.36);
     bow.rotation.x = -0.35;
     for (let i = 0; i < 3; i++) {
       const btn = new THREE.Mesh(new THREE.SphereGeometry(0.011, 8, 6), this.accentMat);
       btn.position.set(0, 0.86 - i * 0.12, 0.395 - i * 0.025);
-      d.add(btn);
+      upper.add(btn);
     }
-    // Solapas con filo de neón.
+    // Solapas de raso con filo de neón.
     for (const sx of [-1, 1]) {
-      const lapel = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.56, 0.012), this.accentMat);
-      lapel.position.set(sx * 0.1, 0.72, 0.415);
-      lapel.rotation.set(-0.32, 0, sx * 0.26);
-      d.add(lapel);
+      const sh = new THREE.Shape();
+      sh.moveTo(sx * 0.015, -0.27);
+      sh.lineTo(sx * 0.135, 0.29);
+      sh.lineTo(sx * 0.2, 0.25);
+      sh.lineTo(sx * 0.045, -0.24);
+      sh.closePath();
+      const lapel = new THREE.Mesh(new THREE.ExtrudeGeometry(sh, { depth: 0.012, bevelEnabled: false }), satin);
+      lapel.position.set(0, 0.7, 0.405);
+      lapel.rotation.x = -0.32;
+      upper.add(lapel);
+      const edge = new THREE.Mesh(new THREE.BoxGeometry(0.01, 0.56, 0.01), this.accentMat);
+      edge.position.set(sx * 0.1, 0.72, 0.425);
+      edge.rotation.set(-0.32, 0, sx * 0.26);
+      upper.add(edge);
     }
-    for (const m of [torso, front, neck]) { m.castShadow = true; d.add(m); }
-    d.add(collar, bow);
+    // Pañuelo de bolsillo.
+    const pocket = new THREE.Shape();
+    pocket.moveTo(-0.04, 0); pocket.lineTo(0.04, 0); pocket.lineTo(0.015, 0.05); pocket.lineTo(-0.005, 0.035); pocket.lineTo(-0.025, 0.055); pocket.closePath();
+    const square = new THREE.Mesh(new THREE.ShapeGeometry(pocket), this.accentMat);
+    square.position.set(0.33, 0.66, 0.33);
+    square.rotation.set(-0.3, 0.45, 0);
+    upper.add(square);
+    for (const m of [torso, front, neck]) { m.castShadow = true; upper.add(m); }
+    upper.add(collar, bow);
 
     // Cabeza: casco lacado con visera luminosa tras un cristal.
     const head = this.head = new THREE.Group();
     head.position.y = 1.52;
-    d.add(head);
+    upper.add(head);
     const shell = new THREE.MeshPhysicalMaterial({
       color: 0x1c1d24, metalness: 0.35, roughness: 0.3, clearcoat: 1, clearcoatRoughness: 0.08,
     });
@@ -514,7 +562,7 @@ export class Scene3D {
     helmet.scale.set(0.3, 0.38, 0.31);
     helmet.castShadow = true;
     head.add(helmet);
-    // Cresta central y mentón.
+    // Cresta central, mentón, marco de la visera y rejillas en las mejillas.
     const crest = new THREE.Mesh(new THREE.TorusGeometry(0.33, 0.012, 6, 40, Math.PI), shell);
     crest.rotation.y = Math.PI / 2;
     crest.scale.set(1, 1.12, 0.92);
@@ -524,6 +572,20 @@ export class Scene3D {
     chin.scale.set(1.3, 0.6, 1);
     chin.position.set(0, -0.27, 0.12);
     head.add(chin);
+    const frame = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 1, 48, 1, true, -1.3, 2.6), new THREE.MeshStandardMaterial({
+      color: 0x08080a, metalness: 0.6, roughness: 0.35, side: THREE.DoubleSide,
+    }));
+    frame.scale.set(0.312, 0.15, 0.322);
+    frame.position.y = 0.03;
+    head.add(frame);
+    for (const sx of [-1, 1]) {
+      for (let i = 0; i < 3; i++) {
+        const vent = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.012, 0.07), new THREE.MeshStandardMaterial({ color: 0x050506, roughness: 0.6 }));
+        vent.position.set(sx * 0.25, -0.13 - i * 0.03, 0.15);
+        vent.rotation.y = sx * 0.6;
+        head.add(vent);
+      }
+    }
 
     this.visorTex = T.visor();
     this.visorMat = new THREE.MeshBasicMaterial({ map: this.visorTex, color: AI_COLOR });
@@ -540,7 +602,7 @@ export class Scene3D {
     this.visorLight = new THREE.PointLight(AI_COLOR, 1.2, 1.5, 2);
     this.visorLight.position.set(0, 0.03, 0.5);
     head.add(this.visorLight);
-    // "Auriculares" laterales con antena.
+    // "Auriculares" laterales con antena y pilotos.
     for (const sx of [-1, 1]) {
       const ear = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.085, 0.07, 24), shell);
       ear.rotation.z = Math.PI / 2;
@@ -550,6 +612,11 @@ export class Scene3D {
       ring.rotation.y = Math.PI / 2;
       ring.position.set(sx * 0.33, 0.02, 0);
       head.add(ring);
+      for (let i = 0; i < 3; i++) {
+        const led = new THREE.Mesh(new THREE.SphereGeometry(0.007, 6, 4), this.accentMat);
+        led.position.set(sx * 0.325, -0.06, -0.03 + i * 0.03);
+        head.add(led);
+      }
     }
     const antenna = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, 0.22, 6), glove);
     antenna.position.set(0.31, 0.16, -0.02);
@@ -560,76 +627,73 @@ export class Scene3D {
     tip.position.set(0.326, 0.27, -0.02);
     head.add(tip);
 
-    // Manos enguantadas, con brazos de dos tramos que siguen a la mano (IK simple).
-    const limb = (r0, r1) => {
-      const g = new THREE.CylinderGeometry(r0, r1, 1, 14);
-      g.translate(0, 0.5, 0);
-      const m = new THREE.Mesh(g, suit);
-      m.castShadow = true;
-      s.add(m);
-      return m;
-    };
+    // Manos enguantadas con dedos de dos falanges, puño de camisa y gemelo de neón;
+    // brazos de dos tramos que siguen a la mano (IK).
     this.hands = [-1, 1].map(side => {
       const g = new THREE.Group();
       const palm = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.055, 0.17), glove);
-      palm.scale.set(1, 1, 1);
       g.add(palm);
       const knuckles = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.15, 10), glove);
       knuckles.rotation.z = Math.PI / 2;
       knuckles.position.set(0, 0, 0.08);
       g.add(knuckles);
+      const fingers = [];
       for (let i = 0; i < 4; i++) {
-        const f = new THREE.Mesh(new THREE.CapsuleGeometry(0.017, 0.1, 3, 8), glove);
-        f.rotation.x = Math.PI / 2 + 0.12;
-        f.position.set(-0.055 + i * 0.037, -0.012, 0.15 - Math.abs(i - 1.5) * 0.015);
+        const f = new THREE.Group();
+        f.position.set(-0.055 + i * 0.037, -0.005, 0.09);
+        const p1 = new THREE.Mesh(new THREE.CapsuleGeometry(0.018, 0.05, 3, 8), glove);
+        p1.rotation.x = Math.PI / 2;
+        p1.position.z = 0.035;
+        const tipG = new THREE.Group();
+        tipG.position.z = 0.075 - Math.abs(i - 1.5) * 0.008;
+        const p2 = new THREE.Mesh(new THREE.CapsuleGeometry(0.016, 0.035, 3, 8), glove);
+        p2.rotation.x = Math.PI / 2;
+        p2.position.z = 0.025;
+        tipG.add(p2);
+        f.add(p1, tipG);
+        f.userData.tip = tipG;
         g.add(f);
+        fingers.push(f);
       }
       const thumb = new THREE.Mesh(new THREE.CapsuleGeometry(0.019, 0.07, 3, 8), glove);
       thumb.rotation.set(Math.PI / 2, 0, side * 0.9);
       thumb.position.set(-side * 0.09, 0, 0.04);
       g.add(thumb);
-      const cuff = new THREE.Mesh(new THREE.TorusGeometry(0.058, 0.009, 6, 20), this.accentMat);
-      cuff.position.set(0, 0.02, -0.11);
-      cuff.rotation.x = -0.25;
+      const cuff = new THREE.Mesh(new THREE.CylinderGeometry(0.066, 0.066, 0.06, 16), cuffMat);
+      cuff.rotation.x = Math.PI / 2;
+      cuff.position.set(0, 0.015, -0.13);
       g.add(cuff);
+      const link = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.02, 0.02), this.accentMat);
+      link.position.set(side * 0.066, 0.015, -0.13);
+      g.add(link);
       g.traverse(o => { o.castShadow = true; });
       const base = new THREE.Vector3(side * 0.62, 0.045, -1.18);
       g.position.copy(base);
       g.rotation.y = -side * 0.25;
       g.userData.base = base;
-      g.userData.arm = {
-        side,
-        upper: limb(0.075, 0.1),
-        fore: limb(0.06, 0.08),
-        elbow: (() => { const e = new THREE.Mesh(new THREE.SphereGeometry(0.08, 14, 10), suit); s.add(e); return e; })(),
-      };
-      s.add(g);
+      g.userData.baseQ = g.quaternion.clone();
+      g.userData.fingers = fingers;
+      const arm = g.userData.arm = { side, a: limbMesh(suit, 0.075, 0.1), b: limbMesh(suit, 0.062, 0.08) };
+      arm.joint = new THREE.Mesh(new THREE.SphereGeometry(0.08, 14, 10), suit);
+      s.add(arm.a, arm.b, arm.joint, g);
       return g;
     });
+  }
+
+  // Curva de los dedos: 0 mano plana, 1 puño (para empuñar la escopeta).
+  curlFingers(hand, k) {
+    for (const f of hand.userData.fingers) {
+      f.rotation.x = 0.15 + k * 1.1;
+      f.userData.tip.rotation.x = 0.25 + k * 1.3;
+    }
   }
 
   // Brazo de dos tramos: hombro -> codo -> muñeca, con el codo hacia fuera y abajo.
   solveArm(hand) {
     const a = hand.userData.arm;
     const S = this.dealer.localToWorld(_v1.set(a.side * 0.6, 0.86, 0.02));
-    const W = hand.localToWorld(_v2.set(0, 0.02, -0.12));
-    const L1 = 0.62, L2 = 0.74;
-    const d = _v3.subVectors(W, S);
-    const dist = THREE.MathUtils.clamp(d.length(), 0.1, L1 + L2 - 0.01);
-    d.normalize();
-    const cosA = THREE.MathUtils.clamp((L1 * L1 + dist * dist - L2 * L2) / (2 * L1 * dist), -1, 1);
-    const pole = _v4.set(a.side * 0.35, -1, 0.1);
-    pole.addScaledVector(d, -pole.dot(d)).normalize();
-    const E = _v5.copy(S).addScaledVector(d, L1 * cosA).addScaledVector(pole, L1 * Math.sqrt(1 - cosA * cosA));
-    const place = (m, A, B) => {
-      const dir = _v6.subVectors(B, A);
-      m.position.copy(A);
-      m.scale.set(1, dir.length(), 1);
-      m.quaternion.setFromUnitVectors(_up, dir.normalize());
-    };
-    place(a.upper, S, E);
-    place(a.fore, E, W);
-    a.elbow.position.copy(E);
+    const W = hand.localToWorld(_v2.set(0, 0.02, -0.15));
+    poseLimb(a, S, W, ARM_UP, ARM_FORE, _v4.set(a.side * 0.35, -1, -0.1));
   }
 
   buildDust() {
@@ -673,11 +737,19 @@ export class Scene3D {
 
   // Sincroniza la escena con el estado de la mesa.
   update(state, myId) {
+    // Si repartes tú, la cámara pasa a la visera del crupier y sus cartas se giran hacia ti.
+    const meP = state.players.find(p => p.id === myId);
+    this.dealerPOV = !!state.dealer.id && state.dealer.id === myId;
+    this.view.mixTarget = this.dealerPOV ? 1 : 0;
+    this.view.angleTarget = meP ? SEATS[meP.seat].rot : 0;
+
     const wanted = new Map();
     const dn = state.dealer.hand.length;
     const dStep = dn > 5 ? 0.3 : 0.4;
     state.dealer.hand.forEach((c, i) => {
-      wanted.set(c.id, { c, pos: new THREE.Vector3((i - (dn - 1) / 2) * dStep, 0.004 + i * 0.002, DEALER_CARDS_Z), rotY: 0 });
+      wanted.set(c.id, {
+        c, pos: new THREE.Vector3((i - (dn - 1) / 2) * dStep, 0.004 + i * 0.002, DEALER_CARDS_Z), rotY: this.dealerPOV ? Math.PI : 0,
+      });
     });
     // Cartas de cada mano en cascada (la esquina superior izquierda queda a la vista);
     // las manos separadas se colocan una al lado de otra.
@@ -708,10 +780,13 @@ export class Scene3D {
         m.rotation.set(0, SHOE_YAW, Math.PI);
         this.cards.set(id, m);
         this.scene.add(m);
-        this.reach = { to: w.pos.clone(), t0: this.clock.elapsedTime };
+        this.reach = { to: w.pos.clone(), t0: this.clock.elapsedTime, from: this.hands[1].position.clone() };
+        m.userData.fresh = true;
       }
       const faceUp = !w.c.hidden;
       if (faceUp && !m.userData.faceSet) {
+        // Destapar una carta que ya estaba en la mesa: el crupier la voltea con la mano.
+        if (!m.userData.fresh) this.reach = { to: w.pos.clone(), t0: this.clock.elapsedTime, flip: true };
         m.userData.front.material.map = T.cardFace(w.c.r, w.c.s);
         m.userData.front.material.needsUpdate = true;
         m.userData.faceSet = true;
@@ -722,7 +797,9 @@ export class Scene3D {
     }
 
     for (const [id, m] of this.cards) {
+      m.userData.fresh = false;
       if (wanted.has(id) || m.userData.leaving) continue;
+      if (!this.sweep) this.sweep = { t0: this.clock.elapsedTime };
       m.userData.leaving = true;
       const to = DISCARD.clone().add(new THREE.Vector3((Math.random() - 0.5) * 0.1, Math.random() * 0.05, (Math.random() - 0.5) * 0.1));
       this.animate(m, to, Math.random() - 0.5, Math.PI, 0.6);
@@ -775,6 +852,46 @@ export class Scene3D {
     const me = state.players.find(p => p.id === myId);
     const look = turnP || (state.phase === 'betting' || !me || me.id === state.dealer.id ? null : me);
     if (!this.gunAnim) this.gazeTarget = look ? Math.atan2(SEATS[look.seat].x, SEATS[look.seat].z - DEALER_Z) : 0;
+
+    this.updateAvatars(state, myId);
+  }
+
+  // Un personaje por jugador sentado (menos el tuyo, que es la cámara, y el de
+  // quien hace de crupier, que está detrás de la mesa). Los gestos salen de
+  // comparar el estado nuevo con el anterior.
+  updateAvatars(state, myId) {
+    const prev = this.prevState;
+    this.prevState = state;
+    const t = this.clock.elapsedTime;
+    const nCards = q => q.hands.reduce((a, h) => a + h.cards.length, 0);
+    const turnP = state.players.find(p => p.id === state.turn);
+    SEATS.forEach((seat, i) => {
+      const p = state.players.find(x => x.seat === i);
+      let av = this.avatars[i];
+      if (av && (!p || av.id !== p.id)) { av.dispose(); av = this.avatars[i] = null; }
+      if (!p) return;
+      if (!av) av = this.avatars[i] = new PlayerAvatar(this.scene, i, p.id);
+      av.root.visible = p.id !== myId && p.id !== state.dealer.id;
+      av.spectator = p.role === 'spectator' && !p.eliminated;
+      av.turn = state.turn === p.id;
+      av.mood = state.phase === 'result' && p.result && p.delta < 0 ? 'lose' : null;
+      // Mira sus cartas en su turno; si no, las de quien juega, o al crupier.
+      const lookSeat = av.turn ? seat : turnP ? SEATS[turnP.seat] : null;
+      if (lookSeat) av.look.set(lookSeat.x, 0, lookSeat.z);
+      else av.look.set(0, 1.55, DEALER_Z);
+      // Eliminado: en el suelo (salvo si el disparo aún está por llegar).
+      if (p.eliminated && !(state.phase === 'result' && state.shots.includes(p.id))) av.fallen();
+
+      const pp = prev && prev.players.find(x => x.id === p.id);
+      if (!pp) return;
+      const wasTurn = prev.turn === p.id;
+      if (!pp.ready && p.ready) av.gesture('push', t);
+      if (wasTurn && p.hands.length > pp.hands.length) av.gesture('wave', t);
+      else if (wasTurn && nCards(p) > nCards(pp)) av.gesture('tap', t);
+      else if (wasTurn && p.hands.some((h, hi) => h.status === 'stand' && pp.hands[hi] && pp.hands[hi].status === 'playing')) av.gesture('wave', t);
+      if (p.hands.some((h, hi) => h.status === 'bust' && pp.hands[hi] && pp.hands[hi].status !== 'bust')) av.gesture('facepalm', t, 0.5);
+      if (state.phase === 'result' && prev.phase !== 'result' && p.result && p.delta > 0) av.gesture('cheer', t, 0.2);
+    });
   }
 
   // Descompone la apuesta en fichas reales y las reparte en pilas de una sola
@@ -800,55 +917,54 @@ export class Scene3D {
     return stacks;
   }
 
-  // Escopeta de dos cañones que el crupier saca de debajo de la mesa.
+  // Escopeta de corredera que el crupier guarda bajo la mesa.
   buildGun() {
-    const g = this.gun = new THREE.Group();
-    const metal = new THREE.MeshPhongMaterial({ color: 0x2a2b30, specular: 0x999999, shininess: 80 });
-    const wood = new THREE.MeshLambertMaterial({ color: 0x4a2a16 });
-    const body = this.gunBody = new THREE.Group();
-    g.add(body);
-    for (const x of [-0.028, 0.028]) {
-      const b = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 0.85, 12), metal);
-      b.rotation.x = Math.PI / 2;
-      b.position.set(x, 0, 0.42);
-      body.add(b);
-    }
-    const recv = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.1, 0.22), metal);
-    recv.position.set(0, -0.01, -0.08);
-    const pump = new THREE.Mesh(new THREE.CylinderGeometry(0.042, 0.042, 0.22, 10), wood);
-    pump.rotation.x = Math.PI / 2;
-    pump.position.set(0, -0.05, 0.3);
-    const stock = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.14, 0.42), wood);
-    stock.position.set(0, -0.07, -0.38);
-    stock.rotation.x = 0.18;
-    body.add(recv, pump, stock);
-    this.flashMat = new THREE.MeshBasicMaterial({ color: 0xffd27a, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false });
-    const flash = new THREE.Mesh(new THREE.SphereGeometry(0.12, 10, 8), this.flashMat);
-    flash.scale.set(1, 1, 2.2);
-    flash.position.set(0, 0, 1.0);
-    body.add(flash);
-    this.gunLight = new THREE.PointLight(0xffb060, 0, 7, 2);
-    this.gunLight.position.set(0, 0, 1.0);
-    body.add(this.gunLight);
-    g.traverse(o => { o.castShadow = true; });
-    g.scale.setScalar(1.4);
-    g.visible = false;
-    this.scene.add(g);
+    const G = this.gunParts = buildShotgun();
+    this.gun = G.group;
+    const aim = (pos, dir) => {
+      const o = new THREE.Object3D();
+      o.position.copy(pos);
+      o.lookAt(pos.clone().add(dir));
+      return o.quaternion.clone();
+    };
+    // Tumbada bajo la mesa, y "en guardia" (cañón arriba, cruzada delante del pecho).
+    this.gunRestQ = aim(GUN_REST, new THREE.Vector3(-1, 0, 0.15));
+    this.gunReadyQ = aim(GUN_READY, new THREE.Vector3(-0.3, 0.9, 0.45));
+    this.gun.position.copy(GUN_REST);
+    this.gun.quaternion.copy(this.gunRestQ);
+    this.scene.add(this.gun);
+    // Orientación de cada mano respecto al arma: la derecha en la empuñadura
+    // (dorso hacia fuera) y la izquierda bajo la corredera (palma arriba).
+    const basis = (x, y, z) => new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, z));
+    this.gripQ = [
+      basis(new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, -1, 0), new THREE.Vector3(1, 0, 0)),
+      basis(new THREE.Vector3(0, -1, 0), new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 0, 1)),
+    ];
+    this.smoke = new Smoke(this.scene);
+    this.shells = new Shells(this.scene, G.shell, (x, z) => this.surfaceAt(x, z));
     this.gunAnim = null;
+    this.gunHold = 0;
+    this.recoil = 0;
   }
 
-  // target: punto al que apunta (null = sin escopeta). onFire se llama al disparar.
-  shoot(target, onFire) {
+  // Altura de lo que hay debajo de (x, z): el tapete o el suelo.
+  surfaceAt(x, z) {
+    const R = TABLE_R + 0.18;
+    const inside = z >= BACK_Z - 0.16 && Math.abs(x) <= R && (z <= ARC_CZ || Math.hypot(x, z - ARC_CZ) <= R);
+    return inside ? 0.004 : -1.3;
+  }
+
+  // target: punto al que apunta (null = sin escopeta). onFire se llama al disparar;
+  // opts.onPump al accionar la corredera; opts.seat es el asiento de la víctima.
+  shoot(target, onFire, opts = {}) {
     if (!target) { setTimeout(onFire, 600); return; }
-    const restQ = new THREE.Quaternion(), aimQ = new THREE.Quaternion();
-    const dummy = new THREE.Object3D();
-    dummy.position.copy(GUN_REST);
-    dummy.lookAt(GUN_REST.x, GUN_REST.y - 1, GUN_REST.z + 1);
-    restQ.copy(dummy.quaternion);
-    dummy.position.copy(GUN_AIM);
-    dummy.lookAt(target);
-    aimQ.copy(dummy.quaternion);
-    this.gunAnim = { t0: this.clock.elapsedTime, restQ, aimQ, onFire, fired: false };
+    const o = new THREE.Object3D();
+    o.position.copy(GUN_AIM);
+    o.lookAt(target);
+    this.gunAnim = {
+      t0: this.clock.elapsedTime, aimQ: o.quaternion.clone(), target: target.clone(),
+      onFire, onPump: opts.onPump, seat: opts.seat, fired: false, pumps: 0, ejected: false, puffAt: 0,
+    };
     this.gazeTarget = Math.atan2(target.x, target.z - DEALER_Z);
   }
 
@@ -863,54 +979,120 @@ export class Scene3D {
     this.resize();
   }
 
+  // Cabeza del personaje de ese asiento (a donde apunta la escopeta).
   seatTarget(seat) {
+    const av = this.avatars[seat];
+    if (av) return av.headWorld();
     const s = SEATS[seat];
-    return new THREE.Vector3(s.x + s.out.x * 0.9, 1.0, s.z + s.out.z * 0.9);
+    return new THREE.Vector3(s.x + s.out.x * 1.1, 0.55, s.z + s.out.z * 1.1);
   }
 
   cameraTarget() {
-    return CAM_POS.clone();
+    return this.camera.position.clone();
   }
 
-  updateGun(t) {
-    const a = this.gunAnim, g = this.gun, body = this.gunBody;
+  // Alguien habla en el chat: su personaje mueve la cabeza (o el crupier, si es él).
+  talk(seat, isDealer) {
+    const t = this.clock.elapsedTime;
+    if (isDealer) this.dealerTalkUntil = t + 1.6;
+    else if (this.avatars[seat]) this.avatars[seat].gesture('talk', t);
+  }
+
+  // Secuencia (s): 0-0.45 coge el arma · 0.45-1.05 la sube · 1.05 corredera ·
+  // 1.35-1.8 encara · 2.0 dispara · 2.35 corredera y cartucho fuera ·
+  // 2.7-3.0 la baja · 3.0-3.2 suelta.
+  updateGun(t, dt) {
+    const a = this.gunAnim, G = this.gunParts, g = this.gun;
     const e = t - a.t0;
-    g.visible = true;
-    if (e < 0.9) {
-      const k = ease(e / 0.9);
-      g.position.lerpVectors(GUN_REST, GUN_AIM, k);
-      g.quaternion.slerpQuaternions(a.restQ, a.aimQ, k);
-    } else if (e < 2.3) {
-      g.position.copy(GUN_AIM);
-      g.position.y += Math.sin(t * 23) * 0.002;
-      g.quaternion.copy(a.aimQ);
-    } else if (e < 3.0) {
-      const k = ease((e - 2.3) / 0.7);
-      g.position.lerpVectors(GUN_AIM, GUN_REST, k);
-      g.quaternion.slerpQuaternions(a.aimQ, a.restQ, k);
+    const seg = (s, d) => smooth(THREE.MathUtils.clamp((e - s) / d, 0, 1));
+    if (e < 0.45) {
+      g.position.copy(GUN_REST);
+      g.quaternion.copy(this.gunRestQ);
+    } else if (e < 1.35) {
+      const k = seg(0.45, 0.6);
+      g.position.lerpVectors(GUN_REST, GUN_READY, k);
+      g.quaternion.slerpQuaternions(this.gunRestQ, this.gunReadyQ, k);
+    } else if (e < 2.7) {
+      const k = seg(1.35, 0.45);
+      g.position.lerpVectors(GUN_READY, GUN_AIM, k);
+      g.quaternion.slerpQuaternions(this.gunReadyQ, a.aimQ, k);
+      // Pulso del que apunta.
+      g.position.y += Math.sin(t * 7.3) * 0.004 * k;
+      g.position.x += Math.sin(t * 5.1) * 0.003 * k;
     } else {
-      g.visible = false;
-      this.gunAnim = null;
-      this.flashMat.opacity = 0;
-      this.gunLight.intensity = 0;
-      return;
+      const k = seg(2.7, 0.3);
+      g.position.lerpVectors(GUN_AIM, GUN_REST, k);
+      g.quaternion.slerpQuaternions(a.aimQ, this.gunRestQ, k);
     }
-    if (!a.fired && e >= 1.3) {
+    this.gunHold = e < 3.0 ? seg(0, 0.45) : 1 - seg(3.0, 0.2);
+
+    // Corredera: atrás y adelante (dos veces: al preparar y tras el disparo).
+    for (const [start, i] of [[1.05, 0], [2.35, 1]]) {
+      if (e >= start && a.pumps === i) { a.pumps++; if (a.onPump) a.onPump(); }
+    }
+    const stroke = s => { const u = (e - s) / 0.3; return u <= 0 || u >= 1 ? 0 : u < 0.45 ? smooth(u / 0.45) : 1 - smooth((u - 0.45) / 0.55); };
+    G.pump.position.z = 0.5 - 0.12 * Math.max(stroke(1.05), stroke(2.35));
+
+    // Disparo.
+    if (!a.fired && e >= 2.0) {
       a.fired = true;
       a.fireT = t;
+      G.flash.rotation.z = Math.random() * Math.PI;
+      G.flash.scale.setScalar(0.85 + Math.random() * 0.5);
+      const m = G.muzzle.getWorldPosition(new THREE.Vector3());
+      const dir = new THREE.Vector3(0, 0, 1).applyQuaternion(g.quaternion);
+      this.smoke.burst(m, dir, 18);
+      const av = a.seat !== undefined && this.avatars[a.seat];
+      if (av) av.hit(t);
       if (a.onFire) a.onFire();
     }
-    if (a.fired) {
-      const r = t - a.fireT;
-      const k = Math.max(0, 1 - r / 0.35);
-      body.position.z = -0.12 * k;
-      body.rotation.x = -0.35 * k;
-      this.flashMat.opacity = r < 0.07 ? 1 : 0;
-      this.gunLight.intensity = r < 0.09 ? 80 : 0;
-    } else {
-      body.position.z = 0;
-      body.rotation.x = 0;
+    const r = a.fired ? t - a.fireT : -1;
+    const kick = r < 0 ? 0 : r < 0.04 ? r / 0.04 : Math.exp(-(r - 0.04) * 8);
+    G.body.position.z = -0.15 * kick;
+    G.body.rotation.x = -0.5 * kick;
+    this.recoil = kick;
+    const on = r >= 0 && r < 0.06;
+    G.flashMat.opacity = on ? 1 : 0;
+    G.coreMat.opacity = on ? 1 : 0;
+    G.light.intensity = r >= 0 && r < 0.12 ? 140 * (1 - r / 0.12) : 0;
+    // Hilo de humo saliendo del cañón un rato después.
+    if (r > 0.1 && r < 1.4 && t > a.puffAt) {
+      a.puffAt = t + 0.09;
+      const m = G.muzzle.getWorldPosition(new THREE.Vector3());
+      this.smoke.burst(m, new THREE.Vector3(0, 0.15, 0), 1);
     }
+    // El cartucho vacío sale por la ventana al accionar la corredera.
+    if (!a.ejected && e >= 2.47) {
+      a.ejected = true;
+      g.updateMatrixWorld(true);
+      const p = g.localToWorld(G.port.clone());
+      const rightV = new THREE.Vector3(1, 0, 0).applyQuaternion(g.quaternion);
+      this.shells.eject(p, rightV.multiplyScalar(1.3).add(new THREE.Vector3((Math.random() - 0.5) * 0.4, 1.5, 0.3)));
+    }
+
+    if (e >= 3.2) {
+      this.gunAnim = null;
+      this.gunHold = 0;
+      this.recoil = 0;
+      G.flashMat.opacity = G.coreMat.opacity = 0;
+      G.light.intensity = 0;
+      G.body.position.z = 0;
+      G.body.rotation.x = 0;
+    }
+  }
+
+  // Lleva las manos del crupier a la empuñadura y a la corredera.
+  holdGun() {
+    const k = this.gunHold, G = this.gunParts, g = this.gun;
+    g.updateMatrixWorld(true);
+    const points = [G.pump.localToWorld(G.fore.clone()), G.body.localToWorld(G.grip.clone())];
+    const gq = new THREE.Quaternion();
+    G.body.getWorldQuaternion(gq);
+    this.hands.forEach((h, i) => {
+      h.position.lerp(points[i], k);
+      h.quaternion.slerp(gq.clone().multiply(this.gripQ[i]), k);
+      this.curlFingers(h, k);
+    });
   }
 
   // Pasada de bloom: lo que no es MeshBasicMaterial se pinta en negro (para que
@@ -918,10 +1100,10 @@ export class Scene3D {
   renderBloom(dt) {
     const swapped = [], hidden = [];
     this.scene.traverse(o => {
-      if (!o.visible || !(o.isMesh || o.isPoints)) return;
+      if (!o.visible || !(o.isMesh || o.isPoints || o.isSprite)) return;
       const m = o.material;
       if (m.isMeshBasicMaterial) return;
-      if (o.isPoints || (!Array.isArray(m) && m.transparent)) { o.visible = false; hidden.push(o); }
+      if (o.isPoints || o.isSprite || (!Array.isArray(m) && m.transparent)) { o.visible = false; hidden.push(o); }
       else { swapped.push(o, m); o.material = DARK; }
     });
     const bg = this.scene.background;
@@ -941,15 +1123,42 @@ export class Scene3D {
     const dt = Math.min(0.05, this.clock.getDelta());
     const t = this.clock.elapsedTime;
 
-    this.camera.position.set(CAM_POS.x + this.mouse.x * 0.18, CAM_POS.y - this.mouse.y * 0.08 + Math.sin(t * 0.6) * 0.01, CAM_POS.z);
-    this.camera.lookAt(CAM_LOOK.x + this.mouse.x * 0.1, CAM_LOOK.y - this.mouse.y * 0.06, CAM_LOOK.z);
+    // Cámara: detrás de tu asiento (girando alrededor de la mesa), o en la
+    // visera del crupier cuando repartes tú.
+    const v = this.view;
+    const kv = 1 - Math.pow(0.04, dt);
+    v.angle += (v.angleTarget - v.angle) * kv;
+    v.mix += (v.mixTarget - v.mix) * kv;
+    const mix = smooth(THREE.MathUtils.clamp(v.mix, 0, 1));
+    const ca = Math.cos(v.angle), sa = Math.sin(v.angle);
+    const around = (P, out) => {
+      const rx = P.x, rz = P.z - ARC_CZ;
+      return out.set(rx * ca + rz * sa, P.y, -rx * sa + rz * ca + ARC_CZ);
+    };
+    const camPos = around(CAM_POS, _v1).lerp(DEALER_CAM, mix);
+    const camLook = around(CAM_LOOK, _v2).lerp(DEALER_LOOK, mix);
+    camPos.y += Math.sin(t * 0.6) * 0.01;
+    this.camera.position.copy(camPos);
+    this.camera.lookAt(camLook);
+    const right = _v3.set(1, 0, 0).applyQuaternion(this.camera.quaternion);
+    const par = 1 - 0.6 * mix;
+    camPos.addScaledVector(right, this.mouse.x * 0.18 * par);
+    camPos.y -= this.mouse.y * 0.08 * par;
+    camLook.addScaledVector(right, this.mouse.x * 0.1 * par);
+    camLook.y -= this.mouse.y * 0.06 * par;
+    this.camera.position.copy(camPos);
+    this.camera.lookAt(camLook);
     if (this.shakeEnd && t < this.shakeEnd) {
       const k = (this.shakeEnd - t) / this.shakeDur * this.shakeAmp;
       this.camera.position.x += (Math.random() - 0.5) * k;
       this.camera.position.y += (Math.random() - 0.5) * k;
       this.camera.rotation.z += (Math.random() - 0.5) * k * 0.5;
     }
-    if (this.gunAnim) this.updateGun(t);
+    // En la vista del crupier no se ve su propio cuerpo, solo los brazos.
+    this.dealerBody.visible = mix < 0.5;
+    if (this.gunAnim) this.updateGun(t, dt);
+    this.smoke.update(dt);
+    this.shells.update(dt);
 
     // Parpadeo ocasional de la lámpara.
     if (t > this.nextFlicker) {
@@ -963,36 +1172,60 @@ export class Scene3D {
 
     // Colores de acento: visera, solapas y LED de la mesa siguen al crupier.
     const pulse = this.dealerActive ? 0.75 + Math.sin(t * 5) * 0.25 : 0.9 + Math.sin(t * 1.5) * 0.1;
-    this.visorMat.color.copy(this.visorColor).multiplyScalar(pulse);
+    if (t > this.nextBlink) this.nextBlink = t + 2.5 + Math.random() * 4;
+    const blink = this.nextBlink - t > 0.12 ? 1 : 0.15;   // la visera "parpadea"
+    this.visorMat.color.copy(this.visorColor).multiplyScalar(pulse * blink);
     this.visorLight.color.copy(this.visorColor);
     this.accentMat.color.copy(this.visorColor);
     this.ledMat.color.copy(this.visorColor).multiplyScalar(0.8);
 
-    // Crupier: respiración, mirada y visera que sigue al jugador.
-    this.dealer.position.y = Math.sin(t * 1.1) * 0.01;
+    // Crupier: respiración, mirada, retroceso del disparo y giro hacia la víctima.
+    const breath = Math.sin(t * 1.1);
+    this.dealer.position.y = breath * 0.01;
+    this.torso.scale.x = 1.28 * (1 + breath * 0.008);
+    this.torso.scale.z = 0.72 * (1 + breath * 0.012);
     this.gaze = lerp(this.gaze, this.gazeTarget, 1 - Math.pow(0.03, dt));
+    this.dealer.rotation.y = this.gaze * 0.22 * this.gunHold;
+    this.dealer.rotation.x = -0.07 * this.recoil;
     const h = this.head;
-    h.rotation.y = this.gaze * 0.7 + Math.sin(t * 0.37) * 0.04;
-    h.rotation.x = 0.1 + Math.sin(t * 0.5) * 0.02;
-    h.rotation.z = Math.sin(t * 0.3) * 0.03;
+    const talking = this.dealerTalkUntil > t ? Math.sin(t * 14) * 0.04 : 0;
+    h.rotation.y = this.gaze * (0.7 - 0.2 * this.gunHold) + Math.sin(t * 0.37) * 0.04;
+    h.rotation.x = 0.1 + Math.sin(t * 0.5) * 0.02 + talking - 0.15 * this.recoil;
+    h.rotation.z = Math.sin(t * 0.3) * 0.03 + 0.12 * this.gunHold;
     this.visorTex.offset.x = THREE.MathUtils.clamp(-this.gaze * 0.06, -0.12, 0.12);
 
-    // Mano derecha que alcanza cada carta repartida.
+    // Manos: la derecha saca cartas del zapato y las lanza; la izquierda recoge.
     const [lh, rh] = this.hands;
     lh.position.copy(lh.userData.base);
     lh.position.y += Math.sin(t * 1.3 + 1) * 0.006;
     rh.position.copy(rh.userData.base);
+    lh.quaternion.copy(lh.userData.baseQ);
+    rh.quaternion.copy(rh.userData.baseQ);
     if (this.reach) {
-      const rt = (t - this.reach.t0) / 0.5;
+      const r = this.reach, rt = (t - r.t0) / 0.55;
       if (rt >= 1) this.reach = null;
-      else {
-        rh.position.lerp(this.reach.to, Math.sin(Math.PI * rt) * 0.35);
-        rh.position.y = rh.userData.base.y + Math.sin(Math.PI * rt) * 0.06;
+      else if (r.flip) {
+        rh.position.lerp(_v4.copy(r.to).setY(0.06), Math.sin(Math.PI * rt) * 0.8);
+      } else {
+        const shoe = _v4.copy(SHOE).setY(SHOE.y + 0.05);
+        const mid = _v5.copy(SHOE).lerp(r.to, 0.42).setY(0.08);
+        if (rt < 0.3) rh.position.lerpVectors(r.from, shoe, smooth(rt / 0.3));
+        else if (rt < 0.65) rh.position.lerpVectors(shoe, mid, smooth((rt - 0.3) / 0.35));
+        else rh.position.lerpVectors(mid, rh.userData.base, smooth((rt - 0.65) / 0.35));
       }
     } else rh.position.y += Math.sin(t * 1.2) * 0.006;
+    if (this.sweep) {
+      const st = (t - this.sweep.t0) / 0.8;
+      if (st >= 1) this.sweep = null;
+      else lh.position.lerp(_v4.set(-0.95, 0.05, -0.72), Math.sin(Math.PI * st));
+    }
+    for (const hand of this.hands) this.curlFingers(hand, 0.1);
+    if (this.gunHold > 0) this.holdGun();
     this.dealer.updateMatrixWorld();
     for (const hand of this.hands) { hand.updateMatrixWorld(); this.solveArm(hand); }
     this.tipMat.color.setScalar(Math.sin(t * 3) > 0.6 ? 1 : 0.15).multiply(_red);
+
+    for (const av of this.avatars) if (av) av.update(t, dt);
 
     // Animación de cartas.
     for (const [id, m] of this.cards) {
