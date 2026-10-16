@@ -8,7 +8,7 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import * as T from './textures.js';
 import { SEATS, TABLE_W, TABLE_D, TABLE_R, ARC_CZ, BACK_Z, DEALER_CARDS_Z } from './layout.js';
-import { limbMesh, poseLimb, ease as easeOut, smooth } from './rig.js';
+import { limbMesh, poseLimb, ease as easeOut, smooth, loftGeometry } from './rig.js';
 import { PlayerAvatar } from './characters.js';
 import { buildShotgun, Smoke, Shells } from './shotgun.js';
 
@@ -204,7 +204,7 @@ export class Scene3D {
       side.rotation.y = -sx * Math.PI / 2;
       s.add(side);
     }
-    const floor = new THREE.Mesh(new THREE.PlaneGeometry(14, 14), lambert({ map: T.floor() }));
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(14, 14), std({ map: T.floor(), roughness: 0.55, metalness: 0.1, bumpMap: T.leatherBump(20), bumpScale: 0.6, envMapIntensity: 0.5 }));
     floor.rotation.x = -Math.PI / 2;
     floor.position.y = -1.3;
     floor.receiveShadow = true;
@@ -236,7 +236,7 @@ export class Scene3D {
     this.buildBar();
 
     // Mesa en "D": cuerpo de madera, faldón metálico, pie, tapete, borde acolchado y tira LED.
-    const woodMat = std({ map: T.wood(), roughness: 0.45, metalness: 0.05, envMapIntensity: 0.6 });
+    const woodMat = new THREE.MeshPhysicalMaterial({ map: T.wood(), roughness: 0.4, clearcoat: 0.6, clearcoatRoughness: 0.15, envMapIntensity: 0.6 });
     const body = new THREE.Mesh(
       new THREE.ExtrudeGeometry(dShape(TABLE_R + 0.18, BACK_Z - 0.16), {
         depth: 0.16, bevelEnabled: true, bevelThickness: 0.02, bevelSize: 0.02, bevelSegments: 3, curveSegments: 64,
@@ -263,7 +263,9 @@ export class Scene3D {
     for (let i = 0; i < uv.count; i++) {
       uv.setXY(i, (pos.getX(i) + TABLE_W / 2) / TABLE_W, (pos.getY(i) + TABLE_D / 2) / TABLE_D);
     }
-    const felt = new THREE.Mesh(feltGeo, lambert({ map: T.felt() }));
+    const felt = new THREE.Mesh(feltGeo, new THREE.MeshPhysicalMaterial({
+      map: T.felt(), roughness: 0.95, sheen: 0.4, sheenRoughness: 0.8, sheenColor: new THREE.Color(0x1f5a44), bumpMap: T.feltBump(14), bumpScale: 0.6,
+    }));
     felt.rotation.x = -Math.PI / 2;
     felt.position.y = 0.002;
     felt.receiveShadow = true;
@@ -273,7 +275,7 @@ export class Scene3D {
     railShape.holes.push(dShape(TABLE_R, BACK_Z));
     const rail = new THREE.Mesh(
       new THREE.ExtrudeGeometry(railShape, { depth: 0.06, bevelEnabled: true, bevelThickness: 0.03, bevelSize: 0.025, bevelSegments: 2, curveSegments: 48 }),
-      std({ map: T.leather(), roughness: 0.5, metalness: 0, envMapIntensity: 0.5 }),
+      new THREE.MeshPhysicalMaterial({ map: T.leather(), roughness: 0.42, clearcoat: 0.3, clearcoatRoughness: 0.4, bumpMap: T.leatherBump(12), bumpScale: 1.2, envMapIntensity: 0.5 }),
     );
     rail.rotation.x = -Math.PI / 2;
     rail.position.y = 0;
@@ -462,8 +464,11 @@ export class Scene3D {
   buildDealer() {
     const s = this.scene;
     const std = o => new THREE.MeshStandardMaterial(o);
-    const suit = std({ color: 0x1e1f29, roughness: 0.85, envMapIntensity: 0.2 });
-    const satin = std({ color: 0x15161d, roughness: 0.32, envMapIntensity: 0.6 });
+    const suit = new THREE.MeshPhysicalMaterial({
+      map: T.suit(), roughness: 0.8, sheen: 0.25, sheenRoughness: 0.6, sheenColor: new THREE.Color(0x3a3e58),
+      bumpMap: T.fabricBump(14), bumpScale: 0.8, envMapIntensity: 0.25,
+    });
+    const satin = new THREE.MeshPhysicalMaterial({ color: 0x111218, roughness: 0.28, sheen: 1, sheenRoughness: 0.3, sheenColor: new THREE.Color(0x8890b0), envMapIntensity: 0.6 });
     // Contraluz para recortar la silueta del crupier contra el fondo.
     const backLight = new THREE.SpotLight(0xb0a0ff, 25, 6, 0.6, 0.6, 2);
     backLight.position.set(0, 3.2, -3.6);
@@ -485,10 +490,18 @@ export class Scene3D {
     d.add(upper);
 
     // Torso torneado: cintura, pecho y hombros redondeados (achatado de delante a atrás).
-    const prof = [[0, -0.6], [0.42, -0.6], [0.4, -0.05], [0.46, 0.45], [0.53, 0.74], [0.5, 0.88], [0.38, 0.98], [0.16, 1.04], [0, 1.05]]
-      .map(([x, y]) => new THREE.Vector2(x, y));
-    const torso = this.torso = new THREE.Mesh(new THREE.LatheGeometry(prof, 40), suit);
-    torso.scale.set(1.28, 1, 0.72);
+    // Torso por secciones: cintura entallada, pecho adelantado, espalda plana y hombros cuadrados.
+    const torso = this.torso = new THREE.Mesh(loftGeometry([
+      { y: -0.6, w: 0.5, d: 0.31, p: 2.2 },
+      { y: -0.1, w: 0.47, d: 0.29, p: 2.2 },
+      { y: 0.25, w: 0.52, d: 0.32, z: 0.02, p: 2.3 },
+      { y: 0.55, w: 0.62, d: 0.36, z: 0.035, p: 2.5 },
+      { y: 0.76, w: 0.69, d: 0.36, z: 0.03, p: 2.9 },
+      { y: 0.87, w: 0.71, d: 0.31, z: 0.01, p: 3.6 },
+      { y: 0.95, w: 0.6, d: 0.26, p: 3.2 },
+      { y: 1.01, w: 0.34, d: 0.2, p: 2.4 },
+      { y: 1.05, w: 0.14, d: 0.13 },
+    ], 48), suit);
     // Hombreras: dan forma de chaqueta y tapan la unión con los brazos.
     for (const sx of [-1, 1]) {
       const pad = new THREE.Mesh(new THREE.SphereGeometry(1, 20, 14), suit);
@@ -1182,8 +1195,8 @@ export class Scene3D {
     // Crupier: respiración, mirada, retroceso del disparo y giro hacia la víctima.
     const breath = Math.sin(t * 1.1);
     this.dealer.position.y = breath * 0.01;
-    this.torso.scale.x = 1.28 * (1 + breath * 0.008);
-    this.torso.scale.z = 0.72 * (1 + breath * 0.012);
+    this.torso.scale.x = 1 + breath * 0.008;
+    this.torso.scale.z = 1 + breath * 0.012;
     this.gaze = lerp(this.gaze, this.gazeTarget, 1 - Math.pow(0.03, dt));
     this.dealer.rotation.y = this.gaze * 0.22 * this.gunHold;
     this.dealer.rotation.x = -0.07 * this.recoil;

@@ -406,3 +406,104 @@ export function flash() {
   flashTex = toTex(c);
   return flashTex;
 }
+
+// ---------- Mapas de relieve (bump) en escala de grises ----------
+// Dan textura física a tela, punto, cuero y fieltro sin imágenes externas.
+const bumpCache = new Map();
+function bumpTex(key, S, draw, repeat) {
+  if (bumpCache.has(key)) return bumpCache.get(key);
+  const [c, ctx] = mk(S, S);
+  ctx.fillStyle = '#808080';
+  ctx.fillRect(0, 0, S, S);
+  draw(ctx, S);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.NoColorSpace;
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.repeat.set(repeat, repeat);
+  t.anisotropy = 4;
+  bumpCache.set(key, t);
+  return t;
+}
+
+function noiseFill(ctx, S, amt, cell = 1) {
+  const img = ctx.getImageData(0, 0, S, S), d = img.data;
+  for (let y = 0; y < S; y += cell) for (let x = 0; x < S; x += cell) {
+    const n = (Math.random() - 0.5) * amt;
+    for (let yy = 0; yy < cell; yy++) for (let xx = 0; xx < cell; xx++) {
+      const i = ((y + yy) * S + x + xx) * 4;
+      d[i] += n; d[i + 1] += n; d[i + 2] += n;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
+// Sarga (tela de traje, vaqueros, chaquetas).
+export function fabricBump(repeat = 6) {
+  return bumpTex('fabric' + repeat, 128, (ctx, S) => {
+    for (let i = -S; i < S * 2; i += 4) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+      ctx.lineWidth = 1.6;
+      ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i + S, S); ctx.stroke();
+      ctx.strokeStyle = 'rgba(0,0,0,0.3)';
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(i + 2, 0); ctx.lineTo(i + 2 + S, S); ctx.stroke();
+    }
+    noiseFill(ctx, S, 30);
+  }, repeat);
+}
+
+// Punto de lana (jerséis, gorros).
+export function knitBump(repeat = 10) {
+  return bumpTex('knit' + repeat, 64, (ctx, S) => {
+    for (let y = 0; y < S; y += 8) for (let x = 0; x < S; x += 8) {
+      ctx.fillStyle = 'rgba(255,255,255,0.55)';
+      ctx.beginPath(); ctx.ellipse(x + 2, y + 4, 1.8, 3.6, -0.5, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.ellipse(x + 6, y + 4, 1.8, 3.6, 0.5, 0, Math.PI * 2); ctx.fill();
+    }
+    noiseFill(ctx, S, 20);
+  }, repeat);
+}
+
+// Grano de cuero.
+export function leatherBump(repeat = 4) {
+  return bumpTex('leather' + repeat, 256, (ctx, S) => {
+    for (let i = 0; i < 1400; i++) {
+      const x = Math.random() * S, y = Math.random() * S, r = 1 + Math.random() * 3;
+      ctx.fillStyle = `rgba(${Math.random() < 0.5 ? '0,0,0' : '255,255,255'},${0.15 + Math.random() * 0.2})`;
+      ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+    }
+    noiseFill(ctx, S, 26);
+  }, repeat);
+}
+
+// Fibras del tapete.
+export function feltBump(repeat = 10) {
+  return bumpTex('felt' + repeat, 256, (ctx, S) => {
+    for (let i = 0; i < 2500; i++) {
+      const x = Math.random() * S, y = Math.random() * S, a = Math.random() * Math.PI, l = 2 + Math.random() * 5;
+      ctx.strokeStyle = `rgba(${Math.random() < 0.5 ? '0,0,0' : '255,255,255'},0.25)`;
+      ctx.lineWidth = 0.7;
+      ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + Math.cos(a) * l, y + Math.sin(a) * l); ctx.stroke();
+    }
+    noiseFill(ctx, S, 24);
+  }, repeat);
+}
+
+// Poros finos para la piel.
+export function skinBump(repeat = 3) {
+  return bumpTex('skin' + repeat, 128, (ctx, S) => noiseFill(ctx, S, 40, 1), repeat);
+}
+
+// Tela de traje oscura con raya diplomática muy fina.
+let suitTex = null;
+export function suit() {
+  if (suitTex) return suitTex;
+  const [c, ctx] = mk(256, 256);
+  ctx.fillStyle = '#1b1c26';
+  ctx.fillRect(0, 0, 256, 256);
+  ctx.fillStyle = 'rgba(150,155,190,0.09)';
+  for (let x = 0; x < 256; x += 16) ctx.fillRect(x, 0, 1, 256);
+  grain(ctx, 256, 256, 10);
+  suitTex = toTex(c, [5, 5]);
+  return suitTex;
+}
