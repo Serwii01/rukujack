@@ -11,7 +11,10 @@
   <link rel="stylesheet" href="css/style.css">
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
   <script type="importmap">
-    { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
+    { "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    } }
   </script>
 </head>
 <body>
@@ -39,6 +42,22 @@
       <div class="row small"><span>EXENCIONES</span><b id="m-waivers"></b></div>
     </div>
     <div id="actions"></div>
+    <section id="chat" hidden>
+      <button id="chat-toggle" class="btn xs" aria-expanded="false">Chat <span id="chat-unread"></span></button>
+      <div id="chat-box">
+        <div id="chat-log" aria-live="polite"></div>
+        <div id="chat-quick">
+          <button class="btn xs" data-q="¡Vamos!">¡Vamos!</button>
+          <button class="btn xs" data-q="Buena mano">Buena mano</button>
+          <button class="btn xs" data-q="Uff...">Uff...</button>
+          <button class="btn xs" data-q="GG">GG</button>
+        </div>
+        <form id="chat-form" autocomplete="off">
+          <input id="chat-input" maxlength="140" spellcheck="false" placeholder="Escribe... (T)" enterkeyhint="send">
+          <button class="btn xs" type="submit">Enviar</button>
+        </form>
+      </div>
+    </section>
     <aside id="panel" hidden>
       <div class="panel-head">
         <span>MESA</span>

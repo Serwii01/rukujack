@@ -84,6 +84,8 @@ export class ClientNet {
       });
       conn.on('data', d => {
         if (d && d.t === 'state') h.onState(d.s);
+        else if (d && d.t === 'chat') h.onChat(d.m);
+        else if (d && d.t === 'chatlog' && Array.isArray(d.list)) d.list.forEach(m => h.onChat(m, true));
         else if (d && d.t === 'full') h.onFull();
       });
       conn.on('close', () => { if (!this.closed) h.onClose(); });

@@ -45,6 +45,8 @@ const LINES = {
   join: n => [`${n} se sienta a la mesa.`],
   newDealer: n => [`${n} toma la banca.`, `${n} es ahora el crupier.`],
   aiDealer: ['La casa vuelve a repartir.'],
+  pass: n => [`${n} pasa esta mano.`, `${n} se reserva.`, `${n} mira desde la barrera.`],
+  allPass: ['Nadie apuesta. Barajo de nuevo.', 'Mano en blanco. Otra vez.'],
   shot: n => [`${n} no tiene más exenciones.`, `Se acabó para ${n}.`],
 };
 
@@ -132,7 +134,7 @@ export class Table {
     const used = new Set(this.players.map(p => p.seat));
     const seat = SEAT_ORDER.find(s => !used.has(s));
     this.players.push({
-      id, name, seat, role: 'player', chips: START_CHIPS, bet: 0, ready: false,
+      id, name, seat, role: 'player', chips: START_CHIPS, bet: 0, ready: false, passed: false,
       hands: [], active: 0, status: 'idle', result: null, delta: 0, waivers: 0, eliminated: false,
     });
     if (this.players.length > 1) this.message = pick(LINES.join(name));
@@ -160,7 +162,7 @@ export class Table {
     if (target !== null && (!p || p.eliminated)) return;
     if (target === this.dealerId) return;
     this.dealerId = target;
-    if (p) { p.ready = false; this.message = pick(LINES.newDealer(p.name)); }
+    if (p) { p.ready = false; p.passed = false; this.message = pick(LINES.newDealer(p.name)); }
     else this.message = pick(LINES.aiDealer);
     if (!this.checkAllReady()) this.emit();
   }
@@ -172,6 +174,7 @@ export class Table {
     if (!p || p.role === role || p.eliminated) return;
     p.role = role;
     p.ready = false;
+    p.passed = false;
     this.message = role === 'spectator' ? `${p.name} se levanta a mirar.` : `${p.name} vuelve a apostar.`;
     if (!this.checkAllReady()) this.emit();
   }
@@ -192,11 +195,21 @@ export class Table {
   placeBet(id, amount) {
     const p = this.get(id);
     if (!p || this.phase !== 'betting' || p.ready || !this.isBettor(p)) return;
+    p.passed = false;
     amount = Math.floor(amount);
     if (!(amount >= MIN_BET && amount <= p.chips)) return;
     p.bet = amount;
     p.ready = true;
     if (!this.deadline) this.setTimer(BET_MS, () => this.deal());
+    if (!this.checkAllReady()) this.emit();
+  }
+
+  // Pasar: no jugar esta mano (o volver a la apuesta con on = false).
+  pass(id, on = true) {
+    const p = this.get(id);
+    if (!p || this.phase !== 'betting' || p.ready || !this.isBettor(p) || p.passed === on) return;
+    p.passed = on;
+    this.message = on ? pick(LINES.pass(p.name)) : `${p.name} se lo piensa mejor.`;
     if (!this.checkAllReady()) this.emit();
   }
 
@@ -209,8 +222,15 @@ export class Table {
 
   checkAllReady() {
     const eligible = this.players.filter(p => this.isBettor(p) && p.chips >= MIN_BET);
-    if (eligible.length && eligible.every(p => p.ready)) { this.deal(); return true; }
-    if (!this.players.some(p => p.ready)) this.setTimer(0);
+    const anyReady = eligible.some(p => p.ready);
+    if (eligible.length && eligible.every(p => p.ready || p.passed)) {
+      if (anyReady) { this.deal(); return true; }
+      // Han pasado todos: mano en blanco y se vuelve a abrir la mesa.
+      this.message = pick(LINES.allPass);
+      this.setTimer(1500, () => this.newRound());
+      return false;
+    }
+    if (!anyReady) this.setTimer(0);
     return false;
   }
 
@@ -460,7 +480,7 @@ export class Table {
     this.order = [];
     this.shots = [];
     for (const p of this.players) {
-      p.hands = []; p.active = 0; p.status = 'idle'; p.ready = false; p.result = null; p.delta = 0;
+      p.hands = []; p.active = 0; p.status = 'idle'; p.ready = false; p.passed = false; p.result = null; p.delta = 0;
       if (p.bet > p.chips) p.bet = Math.max(0, p.chips);
     }
     this.message = pick(LINES.betting);
@@ -487,7 +507,7 @@ export class Table {
         delta: this.dealerDelta,
       },
       players: this.players.map(p => ({
-        id: p.id, name: p.name, seat: p.seat, role: p.role, chips: p.chips, bet: p.bet, ready: p.ready,
+        id: p.id, name: p.name, seat: p.seat, role: p.role, chips: p.chips, bet: p.bet, ready: p.ready, passed: p.passed,
         status: p.status, result: p.result, delta: p.delta, waivers: p.waivers, eliminated: p.eliminated,
         active: p.active,
         canSplit: this.phase === 'playing' && this.turn === p.id && canSplit(p),

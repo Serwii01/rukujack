@@ -37,6 +37,7 @@ setRetro(store.get('rukujack-retro') === '1');
 let myId = null;
 let state = null;
 let sendMsg = () => {};
+let sendChat = () => {};
 let net = null;
 let roomCode = null;
 let deadlineAt = 0;
@@ -98,9 +99,34 @@ function applyMsg(table, id, m) {
     case 'dact': if (['hit', 'stand'].includes(m.a)) table.dealerAction(id, m.a); break;
     case 'deal': table.dealNow(id); break;
     case 'waiver': table.waiver(id); break;
+    case 'pass': table.pass(id, m.on !== false); break;
     case 'setDealer': table.setDealer(id, typeof m.target === 'string' ? m.target : null); break;
     case 'setRole': if (typeof m.target === 'string') table.setRole(id, m.target, m.role); break;
   }
+}
+
+// ---------- Chat (pasa por el anfitrión, sin servidor ni base de datos) ----------
+const CHAT_MAX = 140;
+const chatLog = [];          // historial que guarda el anfitrión para quien se une
+const chatRate = new Map();  // id -> marcas de tiempo recientes (anti-spam)
+
+function hostChat(table, id, text) {
+  const p = table.get(id);
+  const t = String(text || '').replace(/\s+/g, ' ').trim().slice(0, CHAT_MAX);
+  if (!p || !t) return;
+  const now = Date.now();
+  const recent = (chatRate.get(id) || []).filter(x => now - x < 5000);
+  if (recent.length >= 4) return;
+  recent.push(now);
+  chatRate.set(id, recent);
+  hostChatSend({ id, name: p.name, seat: p.seat, text: t });
+}
+
+function hostChatSend(m) {
+  chatLog.push(m);
+  if (chatLog.length > 40) chatLog.shift();
+  onChat(m);
+  if (net) net.broadcast({ t: 'chat', m });
 }
 
 function startLocal(name, isOnline) {
@@ -111,6 +137,7 @@ function startLocal(name, isOnline) {
     if (net) net.broadcast({ t: 'state', s });
   });
   sendMsg = m => applyMsg(table, myId, m);
+  sendChat = text => hostChat(table, myId, text);
   // Acceso para depurar en local (no se usa en producción).
   if (location.hostname === 'localhost') window.__table = table;
   if (!isOnline) {
@@ -132,13 +159,26 @@ function startLocal(name, isOnline) {
       onJoin: (id, pname) => {
         const n = cleanName(pname);
         if (!table.addPlayer(id, n)) { net.send(id, { t: 'full' }); setTimeout(() => net.kick(id), 300); }
-        else { toast(`${n} se sienta a la mesa`); sfx.thump(); }
+        else {
+          toast(`${n} se sienta a la mesa`);
+          sfx.thump();
+          if (chatLog.length) net.send(id, { t: 'chatlog', list: chatLog });
+          hostChatSend({ sys: true, text: `${n} se sienta a la mesa` });
+        }
       },
       onLeave: id => {
         const p = table.get(id);
-        if (p) { toast(`${p.name} abandona la mesa`); table.removePlayer(id); }
+        chatRate.delete(id);
+        if (p) {
+          toast(`${p.name} abandona la mesa`);
+          table.removePlayer(id);
+          hostChatSend({ sys: true, text: `${p.name} abandona la mesa` });
+        }
       },
-      onMessage: (id, m) => applyMsg(table, id, m),
+      onMessage: (id, m) => {
+        if (m && m.t === 'chat') hostChat(table, id, m.text);
+        else applyMsg(table, id, m);
+      },
     });
     net.start(code);
   };
@@ -154,7 +194,15 @@ function join(name, code) {
     if (!inGame) { client.destroy(); net = null; setLobbyBusy(false); lobbyStatus('No responde nadie. ¿Seguro que la mesa sigue abierta?'); }
   }, 15000);
   client.connect(code, name, {
-    onOpen: id => { clearTimeout(giveUp); myId = id; roomCode = code; sendMsg = m => client.send(m); enterGame(code); },
+    onOpen: id => {
+      clearTimeout(giveUp);
+      myId = id;
+      roomCode = code;
+      sendMsg = m => client.send(m);
+      sendChat = text => client.send({ t: 'chat', text });
+      enterGame(code);
+    },
+    onChat: (m, old) => onChat(m, old),
     onState: s => onState(s),
     onFull: () => { client.destroy(); backToLobby(`La mesa está llena (máx. ${MAX_PLAYERS}).`); },
     onClose: () => backToLobby('El anfitrión ha cerrado la mesa.'),
@@ -174,6 +222,7 @@ function enterGame(code) {
   if (code) {
     $('#room-label').innerHTML = `MESA <b>${code}</b>`;
     $('#copy-link').hidden = false;
+    $('#chat').hidden = false;
     history.replaceState(null, '', '#' + code);
   } else {
     $('#room-label').textContent = 'MESA PRIVADA';
@@ -249,7 +298,6 @@ function playShot(id) {
   if (!victim) return;
   const isMe = id === myId;
   const target = isMe ? scene.cameraTarget() : scene.seatTarget(victim.seat);
-  sfx.pump();
   const overlay = $('#shot');
   scene.shoot(target, () => {
     sfx.gunshot();
@@ -265,7 +313,7 @@ function playShot(id) {
       toast(`${victim.name} ha sido eliminado`);
       setTimeout(() => { overlay.className = ''; }, 200);
     }
-  });
+  }, { onPump: () => sfx.pump(), seat: isMe ? undefined : victim.seat });
 }
 
 $('#shot-close').onclick = () => { $('#shot').className = ''; };
@@ -356,16 +404,21 @@ function actionsHtml(s, m) {
       return `<div class="info">Sin fichas<small>${left === 1 ? 'Es tu última exención. Si vuelves a arruinarte, se acabó.' : `Te quedan ${left} exenciones`}</small></div>`
         + `<button class="btn danger" data-a="waiver">Firmar exención (${m.waivers + 1}/${MAX_WAIVERS})</button>`;
     }
+    const dealNow = myId === HOST_ID && !s.dealer.id && s.players.length > 1 && anyReady ? `<button class="btn xs" data-a="deal">Repartir ya</button>` : '';
     if (m.ready) {
-      const extra = myId === HOST_ID && !s.dealer.id && s.players.length > 1 ? `<button class="btn xs" data-a="deal">Repartir ya</button>` : '';
-      return `<div class="info">Apuestas ${m.bet}<small>Esperando al resto</small></div><span class="timer"></span>${extra}`;
+      return `<div class="info">Apuestas ${m.bet}<small>Esperando al resto</small></div><span class="timer"></span>${dealNow}`;
+    }
+    if (m.passed) {
+      return `<div class="info">Pasas esta mano<small>Miras la ronda sin apostar</small></div>`
+        + `<button class="btn" data-a="unpass">Volver a apostar</button><span class="timer"></span>${dealNow}`;
     }
     if (!betAmount) betAmount = m.bet || MIN_BET;
     betAmount = Math.max(MIN_BET, Math.min(m.chips, betAmount));
     return [10, 25, 50, 100].map(v => `<button class="chip" data-a="chip" data-v="${v}" ${v > m.chips ? 'disabled' : ''}>+${v}</button>`).join('')
       + `<div class="bet-amount">${betAmount}</div>`
       + `<button class="btn xs" data-a="min">Mín</button><button class="btn xs" data-a="all">Todo</button>`
-      + `<button class="btn primary" data-a="bet">Apostar<kbd>⏎</kbd></button><span class="timer"></span>`;
+      + `<button class="btn primary" data-a="bet">Apostar<kbd>⏎</kbd></button>`
+      + `<button class="btn" data-a="pass">Pasar<kbd>X</kbd></button><span class="timer"></span>`;
   }
   if (s.phase === 'playing' && s.turn === myId) {
     const handInfo = m.hands.length > 1 ? `<div class="info">Mano ${m.active + 1}/${m.hands.length}<small>${m.hands[m.active].value}</small></div>` : '';
@@ -500,7 +553,7 @@ function renderLabels() {
     const tagCls = p.result || (one ? one.status : p.status);
     if (p.eliminated) tag = '☠ ELIMINADO';
     else if (p.role === 'spectator') tag = 'MIRANDO';
-    else if (s.phase === 'betting') tag = p.chips < MIN_BET ? 'SIN FICHAS' : p.ready ? `APUESTA ${p.bet}` : 'PENSANDO...';
+    else if (s.phase === 'betting') tag = p.chips < MIN_BET ? 'SIN FICHAS' : p.ready ? `APUESTA ${p.bet}` : p.passed ? 'PASA' : 'PENSANDO...';
     else if (p.status === 'idle') tag = 'ESPERA';
     else if (p.result && p.hands.length > 1) tag = p.hands.map(h => RESULT_TXT[h.result]).join(' · ') + ' ' + (p.delta ? signed(p.delta) : '±0');
     else if (p.result) tag = RESULT_TXT[p.result] + (p.delta ? ' ' + signed(p.delta) : '');
@@ -525,16 +578,92 @@ function renderLabels() {
   dealerEl.innerHTML = `${val}<div class="nm">${dp ? esc(dp.name) : 'LA CASA'}</div>${res}${sub}`;
 }
 
+// Bocadillos de chat sobre cada asiento (y sobre el crupier humano).
+const bubbleEls = SEATS.map(() => { const b = document.createElement('div'); b.className = 'bubble'; labelsEl.appendChild(b); return b; });
+const dealerBubble = document.createElement('div');
+dealerBubble.className = 'bubble';
+labelsEl.appendChild(dealerBubble);
+
 scene.onFrame = () => {
   SEATS.forEach((seat, i) => {
     const p = scene.project(seat.x + seat.out.x * 0.36, 0, seat.z + seat.out.z * 0.36);
-    seatEls[i].style.left = p.x + 'px';
-    seatEls[i].style.top = p.y + 'px';
+    seatEls[i].style.left = bubbleEls[i].style.left = p.x + 'px';
+    seatEls[i].style.top = bubbleEls[i].style.top = p.y + 'px';
   });
   const d = scene.project(0, 0.02, DEALER_CARDS_Z - 0.3);
   dealerEl.style.left = d.x + 'px';
   dealerEl.style.top = d.y + 'px';
+  const h = scene.project(0, 1.9, -1.95);
+  dealerBubble.style.left = h.x + 'px';
+  dealerBubble.style.top = h.y + 'px';
 };
+
+// ---------- Chat: interfaz ----------
+const chatEl = $('#chat'), chatLogEl = $('#chat-log'), chatInput = $('#chat-input');
+let chatUnread = 0;
+const isMobile = () => matchMedia('(max-width: 640px)').matches;
+
+function setChatOpen(open) {
+  chatEl.classList.toggle('open', open);
+  $('#chat-toggle').setAttribute('aria-expanded', String(open));
+  if (open) { chatUnread = 0; $('#chat-unread').textContent = ''; chatLogEl.scrollTop = chatLogEl.scrollHeight; }
+}
+
+function onChat(m, old) {
+  if (!m || typeof m.text !== 'string') return;
+  const line = document.createElement('div');
+  line.className = 'chat-line' + (m.sys ? ' sys' : '') + (old ? ' old' : '');
+  if (m.sys) line.textContent = m.text;
+  else {
+    const who = document.createElement('b');
+    who.textContent = cleanName(m.name) + ' ';
+    who.style.color = SEATS[m.seat] ? SEATS[m.seat].color : '';
+    line.append(who, document.createTextNode(m.text.slice(0, CHAT_MAX)));
+  }
+  const atBottom = chatLogEl.scrollHeight - chatLogEl.scrollTop - chatLogEl.clientHeight < 30;
+  chatLogEl.appendChild(line);
+  while (chatLogEl.children.length > 60) chatLogEl.firstChild.remove();
+  if (atBottom || m.id === myId) chatLogEl.scrollTop = chatLogEl.scrollHeight;
+  if (old || m.sys) return;
+
+  if (m.id !== myId) {
+    sfx.chat();
+    if (!chatEl.classList.contains('open') && isMobile()) {
+      chatUnread++;
+      $('#chat-unread').textContent = chatUnread > 9 ? '9+' : chatUnread;
+    }
+  }
+  const byDealer = !!state && state.dealer.id === m.id;
+  scene.talk(m.seat, byDealer);
+  const el = byDealer ? dealerBubble : bubbleEls[m.seat];
+  if (!el) return;
+  el.textContent = m.text.slice(0, 60) + (m.text.length > 60 ? '…' : '');
+  el.style.setProperty('--c', SEATS[m.seat] ? SEATS[m.seat].color : '#fff');
+  el.classList.remove('show');
+  void el.offsetWidth;
+  el.classList.add('show');
+  clearTimeout(el._t);
+  el._t = setTimeout(() => el.classList.remove('show'), 4500);
+}
+
+$('#chat-form').addEventListener('submit', e => {
+  e.preventDefault();
+  const t = chatInput.value.trim();
+  if (t) sendChat(t.slice(0, CHAT_MAX));
+  chatInput.value = '';
+  if (isMobile()) chatInput.blur();
+});
+$('#chat-quick').addEventListener('click', e => {
+  const b = e.target.closest('[data-q]');
+  if (b) { initAudio(); sendChat(b.dataset.q); }
+});
+$('#chat-toggle').onclick = () => setChatOpen(!chatEl.classList.contains('open'));
+chatInput.addEventListener('focus', () => chatEl.classList.add('focus'));
+chatInput.addEventListener('blur', () => chatEl.classList.remove('focus'));
+chatInput.addEventListener('keydown', e => {
+  if (e.key === 'Escape') chatInput.blur();
+  e.stopPropagation();
+});
 
 // ---------- Temporizador ----------
 function tickTimer() {
@@ -563,6 +692,8 @@ function act(a, v) {
     case 'dhit': sendMsg({ t: 'dact', a: 'hit' }); break;
     case 'dstand': sendMsg({ t: 'dact', a: 'stand' }); break;
     case 'waiver': sendMsg({ t: 'waiver' }); sfx.thump(); break;
+    case 'pass': sendMsg({ t: 'pass', on: true }); break;
+    case 'unpass': sendMsg({ t: 'pass', on: false }); break;
   }
 }
 
@@ -574,6 +705,12 @@ $('#actions').addEventListener('click', e => {
 addEventListener('keydown', e => {
   if (!inGame || !state || e.target.tagName === 'INPUT') return;
   const k = e.key.toLowerCase();
+  if (k === 't' && !chatEl.hidden) {
+    e.preventDefault();
+    setChatOpen(true);
+    chatInput.focus();
+    return;
+  }
   const m = me();
   if (!m) return;
   const s = state;
@@ -589,8 +726,11 @@ addEventListener('keydown', e => {
     else if (k === 's') act('stand');
     else if (k === 'd' && m.canDouble) act('double');
     else if (k === 'p' && m.canSplit) act('split');
-  } else if (s.phase === 'betting' && m.role === 'player' && !m.ready && m.chips >= MIN_BET && (k === 'enter' || k === ' ')) {
-    e.preventDefault();
-    act('bet');
+  } else if (s.phase === 'betting' && m.role === 'player' && !m.ready && m.chips >= MIN_BET) {
+    if (k === 'x') act(m.passed ? 'unpass' : 'pass');
+    else if (!m.passed && (k === 'enter' || k === ' ')) {
+      e.preventDefault();
+      act('bet');
+    }
   }
 });

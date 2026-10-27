@@ -9,6 +9,13 @@ Es una **web 100 % estática**: no necesita servidor, base de datos ni pagar nad
 - **Jugar solo**: tú contra la casa (IA).
 - **Abrir mesa online**: te da un código de 5 letras y un botón **Copiar enlace**. Quien lo abra solo tiene que firmar y pulsar **Unirse**. Caben hasta 6 personas, y se pueden ir sumando o marchando entre rondas.
 
+## Chat
+
+En las mesas online hay chat (abajo a la izquierda; en el móvil, botón **Chat**). Pulsa `T` para escribir y `Esc` para salir. Hay frases rápidas y cada mensaje aparece unos segundos en un bocadillo sobre el asiento de quien habla.
+
+- Los mensajes van por la misma conexión P2P que la partida: el anfitrión los reparte a todos. **No se guardan en ningún servidor**; al cerrar la mesa desaparecen.
+- Quien se une recibe los últimos 40 mensajes. Máximo 140 caracteres y 4 mensajes cada 5 s por jugador.
+
 ## Roles: quién reparte y quién apuesta
 
 Pulsa **MESA** (arriba a la derecha) para ver el panel de la mesa.
@@ -38,6 +45,9 @@ Después abre http://localhost:8080. Para probar el multijugador, abre una mesa 
 
 ## Alojarlo gratis (elige una opción)
 
+### Vercel
+Importa el repositorio en Vercel sin *framework* ni comando de build ("Other"); sirve los archivos tal cual. Cada `git push` vuelve a publicar.
+
 ### Opción A: Netlify Drop (la más rápida)
 1. Entra en https://app.netlify.com/drop.
 2. Arrastra **la carpeta entera** del proyecto.
@@ -64,14 +74,15 @@ Después abre http://localhost:8080. Para probar el multijugador, abre una mesa 
 - **Separar**: con dos cartas del mismo valor (8-8, K-10…) puedes partir la mano en dos, poniendo otra apuesta igual. Hasta 3 manos por jugador. Al separar ases, cada mano recibe solo una carta más. Un 21 tras separar no cuenta como blackjack.
 - La casa (IA) pide hasta llegar a 17. El crupier humano debe pedir con 16 o menos y decide con 17 o más.
 - Apuesta mínima: 10. Empiezas con 500 fichas.
+- **Pasar**: si no quieres jugar una mano, pulsa *Pasar* (o `X`) durante las apuestas. Puedes arrepentirte con *Volver a apostar* mientras sigan abiertas. Si pasan todos, la mano se salta.
 - **Exenciones**: si te quedas sin fichas, puedes firmar una exención para recibir 500 más. **Solo hay 3.** Si te arruinas sin exenciones, el crupier saca la escopeta y quedas **eliminado**: ya solo puedes mirar.
 - En multijugador hay 20 s para apostar (desde la primera apuesta) y 30 s por turno. Si se acaba el tiempo, te plantas automáticamente.
 
-Teclas: `H` pedir · `S` plantarse · `D` doblar · `P` separar · `Enter` apostar (o repartir, si eres el crupier).
+Teclas: `H` pedir · `S` plantarse · `D` doblar · `P` separar · `Enter` apostar (o repartir, si eres el crupier) · `X` pasar · `T` chat.
 
 ## Gráficos
 
-Por defecto se ve nítido, con texturas en alta resolución. El botón **Retro** (arriba a la derecha) activa el modo pixelado de baja resolución. La elección se guarda en el navegador.
+Por defecto se ve nítido, con texturas en alta resolución, materiales PBR que reflejan los neones de la sala y *bloom* selectivo (solo brillan neones, visera, LED y detalles de acento). El crupier tiene brazos articulados que siguen a la mano al repartir. Cada jugador tiene su **personaje** sentado en un taburete: cabeza esculpida con ojos que parpadean, cejas, nariz y labios, manos con dedos articulados, peinado o gorra, gafas, vello facial y ropa (sudadera, cazadora de cuero, americana o jersey de cuello vuelto), todo generado a partir de su id. Las telas, el cuero, el punto y el tapete tienen relieve procedural, que gesticula: golpecito en la mesa al pedir, gesto con la mano al plantarse, empuja las fichas al apostar, celebra al ganar, se lleva la mano a la cara al pasarse y se cae del taburete si recibe el disparo. La cámara se sitúa detrás de tu asiento, y **si haces de crupier ves la partida desde su visera** (con sus manos y tus cartas giradas hacia ti). La escopeta es de corredera: el crupier la coge con las dos manos, la recarga, apunta, dispara con fogonazo, retroceso y humo, y el cartucho vacío sale rebotando por la mesa. Las fichas apostadas se descomponen en denominaciones reales (10, 25, 50, 100, 500…) y se apilan en varias pilas según la cantidad. El botón **Retro** (arriba a la derecha) activa el modo pixelado de baja resolución. La elección se guarda en el navegador.
 
 ## Recursos y licencias
 
@@ -95,7 +106,10 @@ css/style.css       estilos: paneles de cristal, neón, efecto CRT suave
 js/main.js          une todo: lobby, HUD, panel de roles, red, entradas
 js/blackjack.js     reglas, roles y estado de la mesa (solo lo ejecuta el anfitrión)
 js/net.js           conexión P2P con PeerJS
-js/scene.js         escena 3D: mesa en D, crupier, cartas, luces
+js/scene.js         escena 3D: mesa en D, crupier, cartas, luces, cámara
+js/characters.js    personajes de los jugadores y sus gestos
+js/shotgun.js       escopeta, humo y cartuchos
+js/rig.js           IK de brazos y piernas compartida
 js/textures.js      texturas procedurales
 js/audio.js         efectos y ambiente sintetizados
 js/layout.js        posiciones y colores de los 6 asientos
@@ -106,4 +120,3 @@ js/layout.js        posiciones y colores de los 6 asientos
 - Rotación automática del crupier cada X rondas.
 - Objetos estilo Buckshot (p. ej. "lupa": ver la carta tapada; "cigarro": deshacer la última carta).
 - Separar parejas y seguro.
-- Chat rápido con frases predefinidas.
